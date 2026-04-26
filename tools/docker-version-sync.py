@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -40,6 +41,7 @@ DEFAULT_CONFIG = "config/docker-version-sync.json"
 @dataclass
 class ImageRef:
     registry: str
+    registry_api: str
     repository: str
     tag: str
     compose_base: str
@@ -109,12 +111,13 @@ def github_headers() -> Dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "1panel-docker-version-bot",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
     token = (
-        os.getenv("GITHUB_TOKEN")
+        os.getenv("GH_API_TOKEN")
+        or os.getenv("GITHUB_TOKEN")
         or os.getenv("GH_TOKEN")
-        or os.getenv("APPSTORE_PUSH_TOKEN")
         or ""
     )
 
@@ -124,26 +127,12 @@ def github_headers() -> Dict[str, str]:
     return headers
 
 
-def http_json(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> Dict[str, Any] | List[Any]:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "1panel-docker-version-bot",
-            "Accept": "application/json",
-            **(headers or {}),
-        },
-    )
-
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def http_request(
+def request_raw(
     url: str,
     method: str = "GET",
     headers: Optional[Dict[str, str]] = None,
     timeout: int = 30,
-) -> urllib.response.addinfourl:
+) -> Tuple[bytes, Dict[str, str], int]:
     req = urllib.request.Request(
         url,
         method=method,
@@ -152,20 +141,43 @@ def http_request(
             **(headers or {}),
         },
     )
-    return urllib.request.urlopen(req, timeout=timeout)
+
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read() if method != "HEAD" else b""
+        return data, dict(resp.headers), int(resp.status)
+
+
+def http_json(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> Dict[str, Any] | List[Any]:
+    raw, resp_headers, status = request_raw(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            **(headers or {}),
+        },
+        timeout=timeout,
+    )
+
+    if not raw:
+        die(f"接口返回空内容：{url}")
+
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        die(f"接口返回空文本：{url}")
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:300].replace("\n", " ")
+        die(f"接口返回内容不是 JSON：{url}，HTTP={status}，Content-Type={resp_headers.get('Content-Type', '')}，错误={exc}，预览={preview}")
 
 
 def parse_image_ref(image: str, default_tag: str = "latest") -> ImageRef:
     """
     解析镜像名，同时保留 compose 中适合展示的 base。
 
-    输入示例：
-    - nginx
-    - nginx:1.27
-    - library/nginx:1.27
-    - owner/app:latest
-    - ghcr.io/owner/app:latest
-    - registry.cn-hangzhou.aliyuncs.com/ns/app:1.0.0
+    Docker Hub 特别处理：
+    用户写 docker.io / registry-1.docker.io / 不写 registry，实际 Registry V2 API 都使用 registry-1.docker.io。
     """
     raw = image.strip().strip("'").strip('"')
 
@@ -191,19 +203,22 @@ def parse_image_ref(image: str, default_tag: str = "latest") -> ImageRef:
         repo_no_tag, tag = repo_part, default_tag
 
     compose_base = raw
-    last_raw = compose_base.rsplit("/", 1)[-1]
-    if ":" in last_raw:
-        compose_base = compose_base.rsplit(":", 1)[0]
     if "@" in compose_base:
         compose_base = compose_base.split("@", 1)[0]
+    if ":" in compose_base.rsplit("/", 1)[-1]:
+        compose_base = compose_base.rsplit(":", 1)[0]
+
+    registry_api = registry
 
     if registry in ("docker.io", "index.docker.io", "registry-1.docker.io"):
         registry = "docker.io"
+        registry_api = "registry-1.docker.io"
         if "/" not in repo_no_tag:
             repo_no_tag = f"library/{repo_no_tag}"
 
     return ImageRef(
         registry=registry,
+        registry_api=registry_api,
         repository=repo_no_tag,
         tag=tag,
         compose_base=compose_base,
@@ -255,7 +270,7 @@ def parse_www_authenticate(header: str) -> Dict[str, str]:
     return result
 
 
-def registry_token(registry: str, repository: str, www_auth: str) -> Optional[str]:
+def registry_token(registry_api: str, repository: str, www_auth: str) -> Optional[str]:
     auth = parse_www_authenticate(www_auth)
     realm = auth.get("realm")
     service = auth.get("service")
@@ -273,7 +288,6 @@ def registry_token(registry: str, repository: str, www_auth: str) -> Optional[st
     url = realm + "?" + urllib.parse.urlencode(params)
 
     headers = {}
-
     username = os.getenv("REGISTRY_USERNAME", "")
     password = os.getenv("REGISTRY_PASSWORD", "")
 
@@ -288,36 +302,60 @@ def registry_token(registry: str, repository: str, www_auth: str) -> Optional[st
     return data.get("token") or data.get("access_token")
 
 
-def registry_v2_json(registry: str, repository: str, path: str, accept: str = "application/json") -> Tuple[Dict[str, Any], Dict[str, str]]:
-    url = f"https://{registry}/v2/{repository}/{path}"
+def registry_request_with_auth(
+    registry_api: str,
+    repository: str,
+    path: str,
+    method: str,
+    accept: str,
+) -> Tuple[bytes, Dict[str, str], int]:
+    url = f"https://{registry_api}/v2/{repository}/{path}"
 
     try:
-        with http_request(url, headers={"Accept": accept}) as resp:
-            body = resp.read().decode("utf-8")
-            data = json.loads(body) if body else {}
-            return data, dict(resp.headers)
+        return request_raw(url, method=method, headers={"Accept": accept})
     except urllib.error.HTTPError as exc:
         if exc.code != 401:
             raise
 
-        token = registry_token(registry, repository, exc.headers.get("WWW-Authenticate", ""))
+        token = registry_token(registry_api, repository, exc.headers.get("WWW-Authenticate", ""))
         if not token:
             raise
 
-        with http_request(
+        return request_raw(
             url,
+            method=method,
             headers={
                 "Accept": accept,
                 "Authorization": f"Bearer {token}",
             },
-        ) as resp:
-            body = resp.read().decode("utf-8")
-            data = json.loads(body) if body else {}
-            return data, dict(resp.headers)
+        )
 
 
-def registry_v2_tags(registry: str, repository: str) -> List[str]:
-    data, _ = registry_v2_json(registry, repository, "tags/list")
+def registry_v2_json(registry_api: str, repository: str, path: str, accept: str = "application/json") -> Tuple[Dict[str, Any], Dict[str, str]]:
+    raw, headers, status = registry_request_with_auth(
+        registry_api=registry_api,
+        repository=repository,
+        path=path,
+        method="GET",
+        accept=accept,
+    )
+
+    if not raw:
+        return {}, headers
+
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return {}, headers
+
+    try:
+        return json.loads(text), headers
+    except json.JSONDecodeError as exc:
+        preview = text[:300].replace("\n", " ")
+        die(f"Registry 返回内容不是 JSON：https://{registry_api}/v2/{repository}/{path}，HTTP={status}，错误={exc}，预览={preview}")
+
+
+def registry_v2_tags(registry_api: str, repository: str) -> List[str]:
+    data, _ = registry_v2_json(registry_api, repository, "tags/list")
     return sorted(set(str(x) for x in data.get("tags", []) if x))
 
 
@@ -327,7 +365,7 @@ def fetch_image_tags(image: str, page_size: int, max_pages: int) -> List[str]:
     if ref.registry == "docker.io":
         return dockerhub_tags(ref.repository, page_size, max_pages)
 
-    return registry_v2_tags(ref.registry, ref.repository)
+    return registry_v2_tags(ref.registry_api, ref.repository)
 
 
 MANIFEST_ACCEPT = ",".join([
@@ -340,9 +378,41 @@ MANIFEST_ACCEPT = ",".join([
 
 
 def fetch_image_digest(image: str, tag: str = "latest") -> str:
+    """
+    获取 image:tag 的 manifest digest。
+    优先 HEAD，因为大多数 Registry 会直接在 Docker-Content-Digest 响应头返回 digest。
+    如果 HEAD 不可用，再 GET。
+    """
     ref = parse_image_ref(image, default_tag=tag)
-    data, headers = registry_v2_json(ref.registry, ref.repository, f"manifests/{tag}", accept=MANIFEST_ACCEPT)
+    path = f"manifests/{tag}"
 
+    # 先尝试 HEAD
+    try:
+        _, headers, _ = registry_request_with_auth(
+            registry_api=ref.registry_api,
+            repository=ref.repository,
+            path=path,
+            method="HEAD",
+            accept=MANIFEST_ACCEPT,
+        )
+        digest = (
+            headers.get("Docker-Content-Digest")
+            or headers.get("docker-content-digest")
+            or headers.get("DOCKER-CONTENT-DIGEST")
+            or ""
+        )
+        if digest.startswith("sha256:"):
+            return digest
+    except Exception as exc:
+        warn(f"HEAD 获取 digest 失败，尝试 GET：{image}:{tag}，错误：{exc}")
+
+    raw, headers, _ = registry_request_with_auth(
+        registry_api=ref.registry_api,
+        repository=ref.repository,
+        path=path,
+        method="GET",
+        accept=MANIFEST_ACCEPT,
+    )
     digest = (
         headers.get("Docker-Content-Digest")
         or headers.get("docker-content-digest")
@@ -350,14 +420,16 @@ def fetch_image_digest(image: str, tag: str = "latest") -> str:
         or ""
     )
 
-    if not digest:
-        # 极少数 registry 不返回 header，尝试从 OCI index 内部取 config digest。
-        digest = str(data.get("config", {}).get("digest", ""))
+    if digest.startswith("sha256:"):
+        return digest
 
-    if not digest.startswith("sha256:"):
-        die(f"获取镜像 digest 失败：{image}:{tag}")
+    # 最后兜底：用 manifest 内容计算 sha256。
+    if raw:
+        calculated = hashlib.sha256(raw).hexdigest()
+        return f"sha256:{calculated}"
 
-    return digest
+    die(f"获取镜像 digest 失败：{image}:{tag}")
+    return ""
 
 
 SEMVER_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-._+].*)?$")
@@ -403,10 +475,16 @@ def github_paginated(url: str, max_pages: int = 5) -> List[Dict[str, Any]]:
     for _ in range(max_pages):
         req = urllib.request.Request(current, headers=github_headers())
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                preview = raw[:300].replace("\n", " ")
+                die(f"GitHub API 返回非 JSON：{current}，错误={exc}，预览={preview}")
+
             if isinstance(data, list):
                 results.extend(data)
-            else:
+            elif isinstance(data, dict):
                 results.append(data)
 
             link = resp.headers.get("Link", "")
@@ -466,12 +544,7 @@ def github_commit(repo: str, branch: str) -> Tuple[str, str]:
     if not sha:
         die(f"无法获取 GitHub commit：{repo}@{branch}")
 
-    date = (
-        data.get("commit", {})
-        .get("committer", {})
-        .get("date", "")
-    )
-
+    date = data.get("commit", {}).get("committer", {}).get("date", "")
     return sha, date
 
 
@@ -481,9 +554,7 @@ def list_version_dirs(app_dir: Path) -> List[str]:
 
     versions = []
     for item in app_dir.iterdir():
-        if not item.is_dir():
-            continue
-        if item.name.startswith("."):
+        if not item.is_dir() or item.name.startswith("."):
             continue
 
         has_data = (item / "data.yml").exists() or (item / "data.yaml").exists()
@@ -524,7 +595,6 @@ def image_candidates(image: str) -> List[str]:
     else:
         candidates.append(f"{ref.registry}/{repo}")
 
-    # 用户原始写法也加入候选
     raw = image.strip().strip("'").strip('"')
     if "@" in raw:
         raw = raw.split("@", 1)[0]
@@ -550,10 +620,6 @@ def replace_image_in_compose(path: Path, image: str, replacement: str) -> bool:
     changed = False
 
     for candidate in image_candidates(image):
-        # 匹配：
-        # image: owner/app:tag
-        # image: owner/app@sha256:xxx
-        # image: "owner/app:tag"
         pattern = re.compile(
             rf'(^\s*image:\s*["\']?)({re.escape(candidate)})(?:(?::[^"\'\s#]+)|(?:@sha256:[a-fA-F0-9]{{64}}))?(["\']?\s*(?:#.*)?$)',
             flags=re.MULTILINE,
@@ -693,7 +759,6 @@ def candidates_for_app(app_cfg: Dict[str, Any], config: Dict[str, Any], state: D
     max_pages = int(config.get("github_max_pages", 5))
     page_size = int(config.get("dockerhub_page_size", 100))
     dockerhub_max_pages = int(config.get("dockerhub_max_pages", 10))
-
     date = today_yyyymmdd()
 
     if mode == "docker_tag":
@@ -730,6 +795,7 @@ def candidates_for_app(app_cfg: Dict[str, Any], config: Dict[str, Any], state: D
         digest = ""
         if app_cfg.get("pin_digest", False):
             digest = fetch_image_digest(image, tag=track_tag)
+            log(f"{app_name} 当前 {image}:{track_tag} digest={digest}")
 
         return [
             {
@@ -831,7 +897,7 @@ def write_summary(created: List[str], skipped: List[str], dry_run: bool) -> None
         lines.append("")
 
     if skipped:
-        lines.append("## No new version")
+        lines.append("## No new version / skipped")
         for item in skipped:
             lines.append(f"- {item}")
         lines.append("")

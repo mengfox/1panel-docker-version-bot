@@ -58,6 +58,10 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Validate Python syntax
+        run: |
+          python3 -m py_compile bot/tools/docker-version-sync.py
+
       - name: Dry run
         env:
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}

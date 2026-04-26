@@ -1,4 +1,4 @@
-# 1Panel Docker Version Bot - rainbow-dnsmgr 定时监控版
+# 1Panel Docker Version Bot - v1.5 优化版
 
 这是 `rainbow-dnsmgr` 专用的 Docker / GitHub Release 自动版本同步 Bot。
 
@@ -11,19 +11,22 @@
 模板目录：apps/rainbow-dnsmgr/latest
 生成目录：apps/rainbow-dnsmgr/<GitHub Release>
 自动检查：每 6 小时运行一次
+历史回填：默认关闭
 ```
 
-## 文件结构
+## 本版优化
 
 ```text
-.github/workflows/docker-version-bot.yml
-config/docker-version-sync.json
-tools/docker-version-sync.py
-docs/RAINBOW_DNSMGR.md
-README.md
+1. 修复已有 2.17 时继续创建 2.16 的历史回填问题
+2. 默认 backfill_missing_versions=false，只跟踪最新版本
+3. 增加 allow_v_prefix_alias，避免 2.17 / v2.17 重复创建
+4. 增加配置校验
+5. push 前自动 pull --rebase，减少冲突
+6. 打包排除 __pycache__
+7. workflow 增加 Python 语法检查
 ```
 
-## 需要配置的 Secret
+## 需要的 Secret
 
 在 Bot 仓库添加：
 
@@ -31,13 +34,11 @@ README.md
 APPSTORE_PUSH_TOKEN
 ```
 
-用途：允许 Bot 推送到 `mengfox/1panel-appstore`。
-
 推荐权限：
 
 ```text
-Public 仓库：public_repo
-Private 仓库：repo
+Public 目标仓库：public_repo
+Private 目标仓库：repo
 Fine-grained token：Contents Read and write
 ```
 
@@ -48,11 +49,7 @@ REGISTRY_USERNAME
 REGISTRY_PASSWORD
 ```
 
-用于私有 Docker Registry。
-
 ## 目标仓库
-
-workflow 默认：
 
 ```yaml
 APPSTORE_REPO: mengfox/1panel-appstore
@@ -71,28 +68,10 @@ APPSTORE_BRANCH: main
   "track_tag": "latest",
   "pin_digest": true,
   "source_version": "latest",
-  "include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
-  "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot)",
   "version_dir_template": "{github_tag}",
   "max_new_versions": 1,
-  "replace_source_version_text": false
+  "backfill_missing_versions": false
 }
-```
-
-## 运行逻辑
-
-```text
-每 6 小时自动运行
-        ↓
-检测 netcccyun/dnsmgr GitHub Release
-        ↓
-如果发现新 Release，复制 apps/rainbow-dnsmgr/latest/
-        ↓
-生成 apps/rainbow-dnsmgr/<release>/
-        ↓
-把 image: netcccyun/dnsmgr:latest 固定成 image: netcccyun/dnsmgr@sha256:...
-        ↓
-提交并推送到 1panel-appstore
 ```
 
 ## 手动运行
@@ -103,10 +82,10 @@ Actions
 → Run workflow
 ```
 
-参数说明：
+参数：
 
 ```text
-dry_run=true   只预览，不推送
+dry_run=true   只预览
 dry_run=false  真实生成并推送
 ```
 
@@ -119,13 +98,4 @@ python3 tools/docker-version-sync.py \
   --repo-root appstore \
   --config config/docker-version-sync.json \
   --dry-run
-```
-
-实际写入：
-
-```bash
-python3 tools/docker-version-sync.py \
-  --repo-root appstore \
-  --config config/docker-version-sync.json \
-  --write
 ```

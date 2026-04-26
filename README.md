@@ -1,14 +1,16 @@
-# 1Panel Docker Version Bot - rainbow-dnsmgr 完整版
+# 1Panel Docker Version Bot - rainbow-dnsmgr 定时监控版
 
-这是用于 `rainbow-dnsmgr` 的完整 Bot 配置包。
+这是 `rainbow-dnsmgr` 专用的 Docker / GitHub Release 自动版本同步 Bot。
 
-目标：
+## 当前策略
 
 ```text
-GitHub Release 作为版本来源
-Docker latest 作为镜像来源
-Docker digest 固定镜像版本
-复制 apps/rainbow-dnsmgr/latest 生成 apps/rainbow-dnsmgr/vX.X
+版本来源：GitHub Release
+镜像来源：Docker latest
+镜像固定：pin_digest=true，生成版本时固定当前 latest digest
+模板目录：apps/rainbow-dnsmgr/latest
+生成目录：apps/rainbow-dnsmgr/<GitHub Release>
+自动检查：每 6 小时运行一次
 ```
 
 ## 文件结构
@@ -18,9 +20,10 @@ Docker digest 固定镜像版本
 config/docker-version-sync.json
 tools/docker-version-sync.py
 docs/RAINBOW_DNSMGR.md
+README.md
 ```
 
-## 需要的 Secret
+## 需要配置的 Secret
 
 在 Bot 仓库添加：
 
@@ -28,43 +31,68 @@ docs/RAINBOW_DNSMGR.md
 APPSTORE_PUSH_TOKEN
 ```
 
-权限：
+用途：允许 Bot 推送到 `mengfox/1panel-appstore`。
+
+推荐权限：
 
 ```text
-如果 1panel-appstore 是公开仓库：public_repo
-如果是私有仓库：repo
+Public 仓库：public_repo
+Private 仓库：repo
+Fine-grained token：Contents Read and write
 ```
 
-Fine-grained token：
+可选：
 
 ```text
-Repository access: mengfox/1panel-appstore
-Contents: Read and write
-Metadata: Read-only
+REGISTRY_USERNAME
+REGISTRY_PASSWORD
 ```
+
+用于私有 Docker Registry。
 
 ## 目标仓库
 
-workflow 默认目标：
+workflow 默认：
 
 ```yaml
 APPSTORE_REPO: mengfox/1panel-appstore
 APPSTORE_BRANCH: main
 ```
 
-## 使用前检查
+## rainbow-dnsmgr 配置
 
-确保 `1panel-appstore` 已存在：
-
-```text
-apps/rainbow-dnsmgr/latest/data.yml
-apps/rainbow-dnsmgr/latest/docker-compose.yml
+```json
+{
+  "app": "rainbow-dnsmgr",
+  "enabled": true,
+  "mode": "github_release",
+  "github_repo": "netcccyun/dnsmgr",
+  "image": "netcccyun/dnsmgr",
+  "track_tag": "latest",
+  "pin_digest": true,
+  "source_version": "latest",
+  "include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
+  "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot)",
+  "version_dir_template": "{github_tag}",
+  "max_new_versions": 1,
+  "replace_source_version_text": false
+}
 ```
 
-并且 compose 镜像写法为：
+## 运行逻辑
 
-```yaml
-image: netcccyun/dnsmgr:latest
+```text
+每 6 小时自动运行
+        ↓
+检测 netcccyun/dnsmgr GitHub Release
+        ↓
+如果发现新 Release，复制 apps/rainbow-dnsmgr/latest/
+        ↓
+生成 apps/rainbow-dnsmgr/<release>/
+        ↓
+把 image: netcccyun/dnsmgr:latest 固定成 image: netcccyun/dnsmgr@sha256:...
+        ↓
+提交并推送到 1panel-appstore
 ```
 
 ## 手动运行
@@ -73,7 +101,13 @@ image: netcccyun/dnsmgr:latest
 Actions
 → Docker Version Bot
 → Run workflow
-→ dry_run=false
+```
+
+参数说明：
+
+```text
+dry_run=true   只预览，不推送
+dry_run=false  真实生成并推送
 ```
 
 ## 本地测试
@@ -85,4 +119,13 @@ python3 tools/docker-version-sync.py \
   --repo-root appstore \
   --config config/docker-version-sync.json \
   --dry-run
+```
+
+实际写入：
+
+```bash
+python3 tools/docker-version-sync.py \
+  --repo-root appstore \
+  --config config/docker-version-sync.json \
+  --write
 ```

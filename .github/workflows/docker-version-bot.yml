@@ -2,8 +2,9 @@ name: Docker Version Bot
 
 on:
   schedule:
-    # 每天北京时间 10:20 运行一次，即 UTC 02:20
-    - cron: "20 2 * * *"
+    # 每 6 小时自动检查一次
+    - cron: "0 */6 * * *"
+
   workflow_dispatch:
     inputs:
       dry_run:
@@ -17,6 +18,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: docker-version-bot
+  cancel-in-progress: false
 
 env:
   APPSTORE_REPO: mengfox/1panel-appstore
@@ -65,7 +70,7 @@ jobs:
             --dry-run
 
       - name: Sync versions and push
-        if: ${{ github.event.inputs.dry_run != 'true' }}
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.dry_run != 'true' }}
         env:
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}

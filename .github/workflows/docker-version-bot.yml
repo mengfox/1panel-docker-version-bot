@@ -1,0 +1,80 @@
+name: Docker Version Bot
+
+on:
+  schedule:
+    # 每天北京时间 10:20 运行一次，即 UTC 02:20
+    - cron: "20 2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only preview, do not push changes"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+env:
+  APPSTORE_REPO: mengfox/1panel-appstore
+  APPSTORE_BRANCH: main
+
+jobs:
+  sync:
+    name: Check Docker/GitHub versions and update AppStore
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout bot repository
+        uses: actions/checkout@v4
+        with:
+          path: bot
+
+      - name: Checkout 1Panel AppStore repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APPSTORE_REPO }}
+          ref: ${{ env.APPSTORE_BRANCH }}
+          token: ${{ secrets.APPSTORE_PUSH_TOKEN }}
+          path: appstore
+          fetch-depth: 0
+
+      - name: Prepare target branch
+        run: |
+          set -e
+          cd appstore
+          git checkout -B "${APPSTORE_BRANCH}" "origin/${APPSTORE_BRANCH}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Dry run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          python3 bot/tools/docker-version-sync.py \
+            --repo-root appstore \
+            --config "$GITHUB_WORKSPACE/bot/config/docker-version-sync.json" \
+            --dry-run
+
+      - name: Sync versions and push
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          python3 bot/tools/docker-version-sync.py \
+            --repo-root appstore \
+            --config "$GITHUB_WORKSPACE/bot/config/docker-version-sync.json" \
+            --write \
+            --commit \
+            --push \
+            --push-branch "${APPSTORE_BRANCH}"

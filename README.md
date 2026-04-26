@@ -1,101 +1,78 @@
-# 1Panel Docker Version Bot - v1.5 优化版
+# 1Panel Docker Version Bot - v1.6 强制只跟踪最新版本
 
-这是 `rainbow-dnsmgr` 专用的 Docker / GitHub Release 自动版本同步 Bot。
+本版重点修复：已有 `2.17` 时，不再继续创建 `2.16`、`2.15` 等旧版本。
+
+## 修复点
+
+```text
+1. 已存在版本判断改为读取 app 目录下所有子目录
+2. 不再要求目录里必须有 data.yml/docker-compose.yml 才算存在
+3. 默认 backfill_missing_versions=false，只处理最新候选版本
+4. 2.17 / v2.17 默认视为同一版本，避免重复创建
+5. dry-run 日志会输出已存在目录，方便排查
+```
 
 ## 当前策略
 
 ```text
-版本来源：GitHub Release
-镜像来源：Docker latest
-镜像固定：pin_digest=true，生成版本时固定当前 latest digest
-模板目录：apps/rainbow-dnsmgr/latest
-生成目录：apps/rainbow-dnsmgr/<GitHub Release>
-自动检查：每 6 小时运行一次
-历史回填：默认关闭
+rainbow-dnsmgr 使用 GitHub Release 作为版本来源
+Docker latest 作为镜像来源
+pin_digest=true 固定当前 latest digest
+source_version=latest 从 latest 模板复制
+每 6 小时自动检查一次
 ```
 
-## 本版优化
+## 正确效果
+
+如果当前已有：
 
 ```text
-1. 修复已有 2.17 时继续创建 2.16 的历史回填问题
-2. 默认 backfill_missing_versions=false，只跟踪最新版本
-3. 增加 allow_v_prefix_alias，避免 2.17 / v2.17 重复创建
-4. 增加配置校验
-5. push 前自动 pull --rebase，减少冲突
-6. 打包排除 __pycache__
-7. workflow 增加 Python 语法检查
+apps/rainbow-dnsmgr/2.17
 ```
 
-## 需要的 Secret
-
-在 Bot 仓库添加：
+上游最新还是：
 
 ```text
-APPSTORE_PUSH_TOKEN
+2.17
 ```
 
-推荐权限：
+则输出：
 
 ```text
-Public 目标仓库：public_repo
-Private 目标仓库：repo
-Fine-grained token：Contents Read and write
+rainbow-dnsmgr 最新版本已存在：2.17，不回填历史版本
 ```
 
-可选：
+不会再创建：
 
 ```text
-REGISTRY_USERNAME
-REGISTRY_PASSWORD
+2.16
+2.15
 ```
 
-## 目标仓库
+## 清理误创建的历史版本
 
-```yaml
-APPSTORE_REPO: mengfox/1panel-appstore
-APPSTORE_BRANCH: main
+如果已经误创建了：
+
+```text
+apps/rainbow-dnsmgr/2.15
+apps/rainbow-dnsmgr/2.16
 ```
 
-## rainbow-dnsmgr 配置
+在 `1panel-appstore` 仓库执行：
 
-```json
-{
-  "app": "rainbow-dnsmgr",
-  "enabled": true,
-  "mode": "github_release",
-  "github_repo": "netcccyun/dnsmgr",
-  "image": "netcccyun/dnsmgr",
-  "track_tag": "latest",
-  "pin_digest": true,
-  "source_version": "latest",
-  "version_dir_template": "{github_tag}",
-  "max_new_versions": 1,
-  "backfill_missing_versions": false
-}
+```bash
+rm -rf apps/rainbow-dnsmgr/2.15 apps/rainbow-dnsmgr/2.16
+
+git add apps/rainbow-dnsmgr
+git commit -m "remove old rainbow-dnsmgr backfill versions"
+git push origin main
 ```
 
-## 手动运行
+## 手动测试
 
 ```text
 Actions
 → Docker Version Bot
 → Run workflow
-```
-
-参数：
-
-```text
-dry_run=true   只预览
-dry_run=false  真实生成并推送
-```
-
-## 本地测试
-
-```bash
-git clone https://github.com/mengfox/1panel-appstore.git appstore
-
-python3 tools/docker-version-sync.py \
-  --repo-root appstore \
-  --config config/docker-version-sync.json \
-  --dry-run
+→ dry_run=true
 ```

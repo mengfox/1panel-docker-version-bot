@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1Panel Docker Version Bot
+1Panel Docker Version Bot v1.6
 
-用于独立 Public 仓库，定时检查 Docker / GitHub 版本，并把新版本同步到目标 1Panel AppStore 仓库。
-
-支持模式：
-- docker_tag
-- github_release
-- github_tag
-- latest_digest
-- github_commit
-
-特点：
-- 无第三方 Python 依赖
+重点修复：
 - 默认只跟踪最新版本，不回填历史版本
-- 支持 Docker Hub / OCI Registry V2
-- 支持 GitHub Release / Tag / Commit
-- 支持 latest digest 固定到 @sha256
-- 支持 dry-run、自动 commit、自动 push
+- 判断已存在版本时，直接读取 app 目录下所有子目录，不再要求目录内必须有 data.yml/docker-compose.yml
+- 非 backfill 模式下只处理 candidates[0]，不会继续向下创建 2.16、2.15
 """
 
 from __future__ import annotations
@@ -136,32 +124,15 @@ def github_headers() -> Dict[str, str]:
     return headers
 
 
-def request_raw(
-    url: str,
-    method: str = "GET",
-    headers: Optional[Dict[str, str]] = None,
-    timeout: int = 30,
-) -> Tuple[bytes, Dict[str, str], int]:
-    req = urllib.request.Request(
-        url,
-        method=method,
-        headers={
-            "User-Agent": "1panel-docker-version-bot",
-            **(headers or {}),
-        },
-    )
+def request_raw(url: str, method: str = "GET", headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> Tuple[bytes, Dict[str, str], int]:
+    req = urllib.request.Request(url, method=method, headers={"User-Agent": "1panel-docker-version-bot", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read() if method != "HEAD" else b""
         return data, dict(resp.headers), int(resp.status)
 
 
 def http_json(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> Dict[str, Any] | List[Any]:
-    raw, resp_headers, status = request_raw(
-        url,
-        method="GET",
-        headers={"Accept": "application/json", **(headers or {})},
-        timeout=timeout,
-    )
+    raw, resp_headers, status = request_raw(url, method="GET", headers={"Accept": "application/json", **(headers or {})}, timeout=timeout)
     text = raw.decode("utf-8", errors="replace").strip()
     if not text:
         die(f"接口返回空内容：{url}")
@@ -208,13 +179,7 @@ def parse_image_ref(image: str, default_tag: str = "latest") -> ImageRef:
         if "/" not in repo_no_tag:
             repo_no_tag = f"library/{repo_no_tag}"
 
-    return ImageRef(
-        registry=registry,
-        registry_api=registry_api,
-        repository=repo_no_tag,
-        tag=tag,
-        compose_base=compose_base,
-    )
+    return ImageRef(registry=registry, registry_api=registry_api, repository=repo_no_tag, tag=tag, compose_base=compose_base)
 
 
 def dockerhub_tags(repository: str, page_size: int, max_pages: int) -> List[str]:
@@ -286,43 +251,21 @@ def registry_token(registry_api: str, repository: str, www_auth: str) -> Optiona
     return data.get("token") or data.get("access_token")
 
 
-def registry_request_with_auth(
-    registry_api: str,
-    repository: str,
-    path: str,
-    method: str,
-    accept: str,
-) -> Tuple[bytes, Dict[str, str], int]:
+def registry_request_with_auth(registry_api: str, repository: str, path: str, method: str, accept: str) -> Tuple[bytes, Dict[str, str], int]:
     url = f"https://{registry_api}/v2/{repository}/{path}"
     try:
         return request_raw(url, method=method, headers={"Accept": accept})
     except urllib.error.HTTPError as exc:
         if exc.code != 401:
             raise
-
         token = registry_token(registry_api, repository, exc.headers.get("WWW-Authenticate", ""))
         if not token:
             raise
-
-        return request_raw(
-            url,
-            method=method,
-            headers={
-                "Accept": accept,
-                "Authorization": f"Bearer {token}",
-            },
-        )
+        return request_raw(url, method=method, headers={"Accept": accept, "Authorization": f"Bearer {token}"})
 
 
 def registry_v2_json(registry_api: str, repository: str, path: str, accept: str = "application/json") -> Tuple[Dict[str, Any], Dict[str, str]]:
-    raw, headers, status = registry_request_with_auth(
-        registry_api=registry_api,
-        repository=repository,
-        path=path,
-        method="GET",
-        accept=accept,
-    )
-
+    raw, headers, status = registry_request_with_auth(registry_api=registry_api, repository=repository, path=path, method="GET", accept=accept)
     if not raw:
         return {}, headers
 
@@ -441,7 +384,6 @@ def github_paginated(url: str, max_pages: int = 5) -> List[Dict[str, Any]]:
 
             if not next_url:
                 break
-
             current = next_url
 
     return results
@@ -480,7 +422,20 @@ def github_commit(repo: str, branch: str) -> Tuple[str, str]:
     return sha, date
 
 
-def list_version_dirs(app_dir: Path) -> List[str]:
+def list_all_version_dirs(app_dir: Path) -> List[str]:
+    """
+    直接读取 app 目录下所有子目录作为已存在版本。
+    不再要求 data.yml/docker-compose.yml，避免因为目录结构不完整导致误判不存在。
+    """
+    if not app_dir.exists():
+        return []
+    return sorted([p.name for p in app_dir.iterdir() if p.is_dir() and not p.name.startswith(".")], key=version_sort_key, reverse=True)
+
+
+def list_template_dirs(app_dir: Path) -> List[str]:
+    """
+    用于选择复制模板目录，仍然优先选择带 data.yml 和 docker-compose.yml 的目录。
+    """
     if not app_dir.exists():
         return []
 
@@ -515,12 +470,15 @@ def existing_matches(existing: set[str], version_dir_name: str, allow_v_prefix_a
 
 
 def choose_source_version(app_dir: Path, configured: str) -> Optional[str]:
-    versions = list_version_dirs(app_dir)
-    if not versions:
-        return None
     if configured and configured != "auto":
-        return configured if configured in versions else None
-    return versions[0]
+        if (app_dir / configured).is_dir():
+            return configured
+        return None
+
+    versions = list_template_dirs(app_dir)
+    if versions:
+        return versions[0]
+    return None
 
 
 def image_candidates(image: str) -> List[str]:
@@ -572,27 +530,7 @@ def replace_image_in_compose(path: Path, image: str, replacement: str) -> bool:
     if changed and new_text != old_text:
         path.write_text(new_text, encoding="utf-8")
         return True
-
     return False
-
-
-def replace_texts_in_tree(version_dir: Path, replacements: Dict[str, str], enabled: bool) -> None:
-    if not enabled:
-        return
-
-    suffixes = {".yml", ".yaml", ".env", ".sh", ".md", ".txt", ".json"}
-    for path in version_dir.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in suffixes:
-            continue
-
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        new_text = text
-        for old, new in replacements.items():
-            if old and new:
-                new_text = new_text.replace(old, new)
-
-        if new_text != text:
-            path.write_text(new_text, encoding="utf-8")
 
 
 def load_state(appstore_root: Path, state_file: str) -> Dict[str, Any]:
@@ -618,7 +556,6 @@ def validate_config(config: Dict[str, Any]) -> None:
     for i, app in enumerate(apps):
         if not isinstance(app, dict):
             die(f"配置错误：apps[{i}] 必须是对象")
-
         if not app.get("enabled", True):
             continue
 
@@ -632,7 +569,6 @@ def validate_config(config: Dict[str, Any]) -> None:
             die(f"配置错误：{name} 缺少 image")
         if mode not in SUPPORTED_MODES:
             die(f"配置错误：{name} mode 不支持：{mode}")
-
         if mode in {"github_release", "github_tag", "github_commit"} and not app.get("github_repo"):
             die(f"配置错误：{name} 使用 {mode} 必须配置 github_repo")
 
@@ -650,15 +586,7 @@ def candidate_context(candidate: VersionCandidate) -> Dict[str, str]:
     }
 
 
-def create_version(
-    appstore_root: Path,
-    app_cfg: Dict[str, Any],
-    new_version_name: str,
-    image_version_for_compose: str,
-    digest: Optional[str],
-    dry_run: bool,
-    ctx: Dict[str, str],
-) -> bool:
+def create_version(appstore_root: Path, app_cfg: Dict[str, Any], new_version_name: str, image_version_for_compose: str, digest: Optional[str], dry_run: bool) -> bool:
     app_name = app_cfg["app"]
     image = app_cfg["image"]
     app_dir = appstore_root / "apps" / app_name
@@ -704,22 +632,6 @@ def create_version(
     if not changed_compose:
         warn(f"未在 {dst_dir} 的 docker-compose 中匹配到镜像：{image}")
 
-    replacements = {
-        source_version: new_version_name,
-        "{github_tag}": ctx.get("github_tag", ""),
-        "{tag}": ctx.get("tag", ""),
-        "{digest}": ctx.get("digest", ""),
-        "{digest12}": ctx.get("digest12", ""),
-        "{commit}": ctx.get("commit", ""),
-        "{commit8}": ctx.get("commit8", ""),
-    }
-
-    replace_texts_in_tree(
-        version_dir=dst_dir,
-        replacements=replacements,
-        enabled=bool(app_cfg.get("replace_source_version_text", False)),
-    )
-
     return True
 
 
@@ -743,11 +655,7 @@ def candidates_for_app(app_cfg: Dict[str, Any], config: Dict[str, Any], state: D
     if mode in {"github_release", "github_tag"}:
         github_repo = app_cfg["github_repo"]
         if mode == "github_release":
-            versions = github_releases(
-                github_repo,
-                include_prerelease=bool(app_cfg.get("include_prerelease", False)),
-                max_pages=max_pages,
-            )
+            versions = github_releases(github_repo, include_prerelease=bool(app_cfg.get("include_prerelease", False)), max_pages=max_pages)
         else:
             versions = github_tags(github_repo, max_pages=max_pages)
 
@@ -790,26 +698,11 @@ def candidates_for_app(app_cfg: Dict[str, Any], config: Dict[str, Any], state: D
         if app_state.get("commit") == commit:
             log(f"{app_name} commit 未变化：{commit8}")
             return []
-
         track_tag = app_cfg.get("track_tag", "latest")
         digest = ""
         if app_cfg.get("pin_digest", False):
             digest = fetch_image_digest(image, tag=track_tag)
-
-        return [
-            VersionCandidate(
-                tag=track_tag,
-                github_tag=track_tag,
-                version_value=commit8,
-                image_tag=track_tag,
-                date=date,
-                commit=commit,
-                commit8=commit8,
-                commit_date=commit_date,
-                digest=digest,
-                digest12=digest.replace("sha256:", "")[:12] if digest else "",
-            )
-        ]
+        return [VersionCandidate(tag=track_tag, github_tag=track_tag, version_value=commit8, image_tag=track_tag, date=date, commit=commit, commit8=commit8, commit_date=commit_date, digest=digest, digest12=digest.replace("sha256:", "")[:12] if digest else "")]
 
     die(f"未知 mode：{mode}，应用：{app_name}")
     return []
@@ -903,9 +796,11 @@ def main() -> None:
             continue
 
         app_dir = appstore_root / "apps" / app_name
-        existing = set(list_version_dirs(app_dir))
+        existing = set(list_all_version_dirs(app_dir))
         template = app_cfg.get("version_dir_template", "{tag}")
         backfill_missing_versions = bool(app_cfg.get("backfill_missing_versions", config.get("backfill_missing_versions", False)))
+
+        log(f"{app_name} 已存在目录：{', '.join(sorted(existing, key=version_sort_key)) or '无'}")
 
         if not backfill_missing_versions:
             latest = candidates[0]
@@ -936,7 +831,6 @@ def main() -> None:
                 image_version_for_compose=candidate.image_tag or candidate.tag or "latest",
                 digest=candidate.digest or None,
                 dry_run=dry_run,
-                ctx=ctx,
             )
 
             if ok:
@@ -986,7 +880,6 @@ def main() -> None:
             log("没有文件变更，无需 commit")
 
     if args.push:
-        # 尽量减少定时任务与人工提交冲突。
         run(["git", "pull", "--rebase", "origin", args.push_branch], cwd=appstore_root, check=False)
         run(["git", "push", "origin", f"HEAD:{args.push_branch}"], cwd=appstore_root)
 

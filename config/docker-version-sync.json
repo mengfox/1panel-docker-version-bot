@@ -9,67 +9,19 @@
   "commit_message": "chore: sync docker image versions",
   "apps": [
     {
-      "app": "nginx",
-      "enabled": false,
-      "mode": "docker_tag",
-      "image": "nginx",
-      "source_version": "auto",
-      "include_regex": "^\\d+\\.\\d+(\\.\\d+)?(-alpine)?$",
-      "exclude_regex": "(mainline|perl|otel|bookworm|bullseye|rc|beta|alpha)",
-      "version_dir_template": "{tag}",
-      "max_new_versions": 1
-    },
-    {
-      "app": "some-app",
-      "enabled": false,
+      "app": "rainbow-dnsmgr",
+      "enabled": true,
       "mode": "github_release",
-      "github_repo": "owner/some-app",
-      "image": "owner/some-app",
+      "github_repo": "netcccyun/dnsmgr",
+      "image": "netcccyun/dnsmgr",
       "track_tag": "latest",
       "pin_digest": true,
       "source_version": "auto",
-      "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+      "include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
       "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot)",
       "version_dir_template": "{github_tag}",
-      "max_new_versions": 1
-    },
-    {
-      "app": "another-app",
-      "enabled": false,
-      "mode": "github_tag",
-      "github_repo": "owner/another-app",
-      "image": "owner/another-app",
-      "track_tag": "latest",
-      "pin_digest": true,
-      "source_version": "auto",
-      "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
-      "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot)",
-      "version_dir_template": "{github_tag}",
-      "max_new_versions": 1
-    },
-    {
-      "app": "latest-only-app",
-      "enabled": false,
-      "mode": "latest_digest",
-      "image": "owner/latest-only-app",
-      "track_tag": "latest",
-      "pin_digest": true,
-      "source_version": "auto",
-      "version_dir_template": "latest-{date}-{digest12}",
-      "max_new_versions": 1
-    },
-    {
-      "app": "commit-app",
-      "enabled": false,
-      "mode": "github_commit",
-      "github_repo": "owner/commit-app",
-      "github_branch": "main",
-      "image": "owner/commit-app",
-      "track_tag": "latest",
-      "pin_digest": true,
-      "source_version": "auto",
-      "version_dir_template": "git-{date}-{commit8}",
-      "max_new_versions": 1
+      "max_new_versions": 1,
+      "replace_source_version_text": false
     }
   ]
 }

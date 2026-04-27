@@ -1201,7 +1201,7 @@ def write_summary(created: List[str], updated: List[str], deleted: List[str], sk
             lines.append(f"## {title}")
             lines.extend([f"- {item}" for item in values])
             lines.append("")
-    Path(summary_path).write_text("\\n".join(lines), encoding="utf-8")
+    Path(summary_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, Any], state: Dict[str, Any], args: argparse.Namespace, dry_run: bool) -> Tuple[List[str], List[str], List[str], List[str]]:

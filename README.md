@@ -1,4 +1,4 @@
-# 1Panel Docker Version Bot v2.6
+# 1Panel Docker Version Bot v2.7
 
 这是用于维护 `mengfox/1panel-appstore` 的自动版本同步工具，当前默认监控：
 
@@ -7,7 +7,19 @@
 - `mtab`：版本来源为 Docker Hub 标签，镜像使用 `itushan/mtab:<version>`，并以 Docker Hub 官方镜像标签为准；
 - 所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
 
-## v2.6 本次重点
+## v2.7 本次重点
+
+### 修复 GitHub Summary 换行显示问题
+
+本版修复 `GITHUB_STEP_SUMMARY` 把换行显示成字面量 `\n` 的问题。现在 Summary 会按正常 Markdown 渲染标题、表格和列表。
+
+同时调整 GitHub Actions 流程：
+
+1. 手动选择 `dry_run=true` 时，只运行预览步骤；
+2. 手动选择 `dry_run=false` 或定时任务执行时，只运行真实同步步骤；
+3. 避免同一次运行里同时出现 dry-run 摘要和 write 摘要，减少误解。
+
+## v2.6 重点
 
 ### mtab 以官方镜像标签为准
 

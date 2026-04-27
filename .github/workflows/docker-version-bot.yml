@@ -2,19 +2,22 @@ name: Docker Version Bot
 
 on:
   schedule:
-    # 每 6 小时自动检查一次
     - cron: "0 */6 * * *"
-
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Only preview, do not push changes"
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options:
-          - "false"
           - "true"
+          - "false"
+      max_new:
+        description: "Max new versions per app, empty means config default"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -67,23 +70,47 @@ jobs:
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          MAX_NEW_INPUT: ${{ github.event.inputs.max_new }}
         run: |
+          set -euo pipefail
+          EXTRA_ARGS=()
+          if [ -n "${MAX_NEW_INPUT:-}" ]; then
+            if ! echo "$MAX_NEW_INPUT" | grep -Eq '^[0-9]+$'; then
+              echo "max_new must be a non-negative integer" >&2
+              exit 1
+            fi
+            EXTRA_ARGS=(--max-new "$MAX_NEW_INPUT")
+          fi
+
           python3 bot/tools/docker-version-sync.py \
             --repo-root appstore \
             --config "$GITHUB_WORKSPACE/bot/config/docker-version-sync.json" \
-            --dry-run
+            --dry-run \
+            "${EXTRA_ARGS[@]}"
 
       - name: Sync versions and push
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.dry_run != 'true' }}
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.dry_run == 'false' }}
         env:
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          MAX_NEW_INPUT: ${{ github.event.inputs.max_new }}
         run: |
+          set -euo pipefail
+          EXTRA_ARGS=()
+          if [ -n "${MAX_NEW_INPUT:-}" ]; then
+            if ! echo "$MAX_NEW_INPUT" | grep -Eq '^[0-9]+$'; then
+              echo "max_new must be a non-negative integer" >&2
+              exit 1
+            fi
+            EXTRA_ARGS=(--max-new "$MAX_NEW_INPUT")
+          fi
+
           python3 bot/tools/docker-version-sync.py \
             --repo-root appstore \
             --config "$GITHUB_WORKSPACE/bot/config/docker-version-sync.json" \
             --write \
             --commit \
             --push \
-            --push-branch "${APPSTORE_BRANCH}"
+            --push-branch "${APPSTORE_BRANCH}" \
+            "${EXTRA_ARGS[@]}"

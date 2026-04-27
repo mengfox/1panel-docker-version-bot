@@ -2,6 +2,7 @@
   "state_file": ".state/docker-version-bot.json",
   "backfill_missing_versions": false,
   "allow_v_prefix_alias": true,
+  "on_existing_digest_change": "update_existing",
   "dockerhub_page_size": 100,
   "dockerhub_max_pages": 10,
   "github_max_pages": 5,
@@ -21,10 +22,28 @@
       "source_version": "latest",
       "include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
       "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot)",
-      "version_dir_template": "{github_tag}",
+      "version_dir_template": "{clean_github_tag}",
       "max_new_versions": 1,
       "backfill_missing_versions": false,
-      "replace_source_version_text": false
+      "on_existing_digest_change": "update_existing",
+      "cleanup_old_versions": true,
+      "keep_latest_versions": 3,
+      "preserve_versions": [
+        "latest"
+      ],
+      "cleanup_include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
+      "fallback_to_github_tags": true,
+      "require_image_match": true,
+      "cleanup_when_no_candidates": false
     }
-  ]
+  ],
+  "cleanup_old_versions": true,
+  "keep_latest_versions": 3,
+  "preserve_versions": [
+    "latest"
+  ],
+  "cleanup_include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
+  "fallback_to_github_tags": true,
+  "require_image_match": true,
+  "cleanup_when_no_candidates": false
 }

@@ -35,6 +35,26 @@
       "fallback_to_github_tags": true,
       "require_image_match": true,
       "cleanup_when_no_candidates": false
+    },
+    {
+      "app": "next-terminal",
+      "enabled": true,
+      "mode": "docker_tag",
+      "image": "dushixiang/next-terminal",
+      "source_version": "latest",
+      "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+      "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
+      "version_dir_template": "{clean_tag}",
+      "max_new_versions": 1,
+      "backfill_missing_versions": false,
+      "cleanup_old_versions": true,
+      "keep_latest_versions": 3,
+      "preserve_versions": [
+        "latest"
+      ],
+      "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+      "require_image_match": true,
+      "cleanup_when_no_candidates": false
     }
   ],
   "cleanup_old_versions": true,

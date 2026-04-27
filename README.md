@@ -1,13 +1,45 @@
-# 1Panel Docker Version Bot v2.3
+# 1Panel Docker Version Bot v2.4
 
-这是用于维护 `mengfox/1panel-appstore` 的自动版本同步工具，当前默认配置针对：
+这是用于维护 `mengfox/1panel-appstore` 的自动版本同步工具，当前默认配置针对多个 1Panel 应用：
 
-- 应用：`rainbow-dnsmgr`
-- 上游源码：`netcccyun/dnsmgr`
-- 镜像：`netcccyun/dnsmgr:latest`
-- 版本来源：GitHub Release，Release 为空时可自动回退 Git Tag
-- 镜像锁定：`@sha256:digest`
-- 版本保留：只保留最新 3 个版本，保留 `latest` 模板目录
+- `rainbow-dnsmgr`：版本来源为 GitHub Release，镜像使用 `netcccyun/dnsmgr:latest` 并固定 `@sha256:digest`；
+- `next-terminal`：版本来源为 Docker Hub 标签，镜像使用 `dushixiang/next-terminal:<version>`；
+- 所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
+
+## v2.4 本次新增
+
+### 新增 Next Terminal 监控更新
+
+新增 `next-terminal` 应用监控配置：
+
+```json
+{
+  "app": "next-terminal",
+  "enabled": true,
+  "mode": "docker_tag",
+  "image": "dushixiang/next-terminal",
+  "source_version": "latest",
+  "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+  "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
+  "version_dir_template": "{clean_tag}",
+  "max_new_versions": 1,
+  "cleanup_old_versions": true,
+  "keep_latest_versions": 3,
+  "preserve_versions": ["latest"],
+  "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+  "require_image_match": true,
+  "cleanup_when_no_candidates": false
+}
+```
+
+策略说明：
+
+1. 只跟踪 Docker Hub 上的稳定版本标签，例如 `v3.1.0`、`3.1.0`；
+2. 默认排除 `alpha`、`beta`、`rc`、`dev`、`nightly`、`snapshot`、`preview`、`canary`、`b4` 等预览/测试版本；
+3. 如果上游标签是 `v3.1.0`，生成目录为 `3.1.0`；
+4. 从 `apps/next-terminal/latest` 复制模板；
+5. 自动替换模板中的 `dushixiang/next-terminal:<旧版本>`；
+6. 只保留最新 3 个版本目录，永远保留 `latest` 模板目录。
 
 ## v2.3 本次优化
 
@@ -93,7 +125,7 @@ v2.2 起已优化 GitHub Actions 日志可读性：
 Actions -> Docker Version Bot -> Run workflow -> dry_run=true
 ```
 
-重点看日志里的这些内容：
+重点看日志里的这些内容，尤其是 `rainbow-dnsmgr` 和 `next-terminal` 两个应用是否都进入检查：
 
 ```text
 运行模式

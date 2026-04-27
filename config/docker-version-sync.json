@@ -59,11 +59,11 @@
       "official_versions_source_of_truth": false
     },
     {
-      "app": "mtab",
+      "app": "zdir",
       "enabled": true,
       "mode": "docker_tag",
-      "image": "itushan/mtab",
-      "source_version": "auto",
+      "image": "helloz/zdir",
+      "source_version": "latest",
       "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
       "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
       "version_dir_template": "{clean_tag}",
@@ -74,12 +74,16 @@
       "preserve_versions": [
         "latest"
       ],
-      "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+      "cleanup_include_regex": [
+        "^v?\\d+\\.\\d+\\.\\d+$",
+        "^\\d{8}-[a-fA-F0-9]{12}$"
+      ],
       "require_image_match": true,
       "cleanup_when_no_candidates": false,
       "skip_older_than_existing": false,
       "official_versions_source_of_truth": true,
-      "prune_unofficial_versions": true
+      "prune_unofficial_versions": true,
+      "pin_digest": false
     }
   ],
   "cleanup_old_versions": true,

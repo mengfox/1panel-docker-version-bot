@@ -1,45 +1,42 @@
-# 1Panel Docker Version Bot v2.7
+# 1Panel Docker Version Bot - v3.0
 
-这是用于维护 `mengfox/1panel-appstore` 的自动版本同步工具，当前默认监控：
+用于独立 Public 仓库，自动检查 Docker Hub / GitHub Release / GitHub Tag / latest digest，并把新版本同步到目标 `1Panel AppStore` 仓库。
 
-- `rainbow-dnsmgr`：版本来源为 GitHub Release，镜像使用 `netcccyun/dnsmgr:latest`，并固定 `@sha256:digest`；
-- `next-terminal`：版本来源为 Docker Hub 标签，镜像使用 `dushixiang/next-terminal:<version>`；
-- `mtab`：版本来源为 Docker Hub 标签，镜像使用 `itushan/mtab:<version>`，并以 Docker Hub 官方镜像标签为准；
-- 所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
+## 当前内置应用
 
-## v2.7 本次重点
+- `rainbow-dnsmgr`：使用 GitHub Release 作为版本来源，镜像固定 `latest` digest；
+- `next-terminal`：使用 Docker Hub 版本标签作为版本来源；
+- `zdir`：使用 Docker Hub 版本标签作为版本来源，不再使用 `latest` digest 生成日期目录。
 
-### 修复 GitHub Summary 换行显示问题
+所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
 
-本版修复 `GITHUB_STEP_SUMMARY` 把换行显示成字面量 `\n` 的问题。现在 Summary 会按正常 Markdown 渲染标题、表格和列表。
+## v3.0 本次修正
 
-同时调整 GitHub Actions 流程：
+你要求 `zdir` 不要再按 `latest` 更新，本版已改为按 Docker Hub 镜像版本标签监控：
 
-1. 手动选择 `dry_run=true` 时，只运行预览步骤；
-2. 手动选择 `dry_run=false` 或定时任务执行时，只运行真实同步步骤；
-3. 避免同一次运行里同时出现 dry-run 摘要和 write 摘要，减少误解。
+```text
+helloz/zdir:<version>
+```
 
-## v2.6 重点
+也就是：
 
-### mtab 以官方镜像标签为准
+1. 读取 Docker Hub `helloz/zdir` 的 Tag 列表；
+2. 只匹配稳定版本号，例如 `0.3.6`；
+3. 不使用 `latest` 作为版本目录；
+4. 从 `apps/zdir/latest` 模板复制新目录；
+5. 自动把镜像改为 `helloz/zdir:<version>`；
+6. 如果之前生成过 `20260427-digest12` 这类目录，会作为旧策略目录清理；
+7. 只保留最新 3 个版本目录，`latest` 永远保留。
 
-`mtab` 当前使用 Docker Hub 官方标签作为唯一版本来源。如果本地目录存在高于官方标签的历史版本，例如本地有 `2.9.5`，但 Docker Hub 官方稳定标签是 `2.9.3`，脚本会：
-
-1. 从现有可用模板目录复制生成 `2.9.3`；
-2. 将镜像改为 `itushan/mtab:2.9.3`；
-3. 删除本地非官方版本目录 `2.9.5`；
-4. 继续只保留最新 3 个官方版本；
-5. `dry_run=true` 时只预览，不会真正创建或删除。
-
-对应配置：
+## zdir 配置
 
 ```json
 {
-  "app": "mtab",
+  "app": "zdir",
   "enabled": true,
   "mode": "docker_tag",
-  "image": "itushan/mtab",
-  "source_version": "auto",
+  "image": "helloz/zdir",
+  "source_version": "latest",
   "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
   "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
   "version_dir_template": "{clean_tag}",
@@ -48,12 +45,16 @@
   "cleanup_old_versions": true,
   "keep_latest_versions": 3,
   "preserve_versions": ["latest"],
-  "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+  "cleanup_include_regex": [
+    "^v?\\d+\\.\\d+\\.\\d+$",
+    "^\\d{8}-[a-fA-F0-9]{12}$"
+  ],
   "require_image_match": true,
   "cleanup_when_no_candidates": false,
   "skip_older_than_existing": false,
   "official_versions_source_of_truth": true,
-  "prune_unofficial_versions": true
+  "prune_unofficial_versions": true,
+  "pin_digest": false
 }
 ```
 
@@ -79,44 +80,12 @@
 
 1. 默认只处理最新候选版本，不回填历史版本；
 2. `2.17`、`v2.17`、`V2.17` 视为同一个版本；
-3. 如果版本目录已存在，但 Docker `latest` digest 变化，会直接更新已有目录；
+3. 如果版本目录已存在，但 Docker `latest` digest 变化，可按应用策略更新已有目录；
 4. 每个应用只保留最新 3 个版本；
 5. `latest` 模板目录永远保留；
-6. 清理旧版本时只处理版本号目录，避免误删 `assets`、`scripts`、`images` 等目录；
+6. 清理旧版本时只处理版本目录，避免误删 `assets`、`scripts`、`images` 等目录；
 7. 上游无候选版本时不清理旧版本；
-8. 模板镜像不匹配时不创建新版本；
-9. 对 `mtab` 可启用 `official_versions_source_of_truth=true`，按 Docker Hub 官方标签修正本地错误版本。
-
-## mtab 官方版本修正示例
-
-假设本地目录：
-
-```text
-apps/mtab/2.9.5
-apps/mtab/assets
-```
-
-Docker Hub 官方候选：
-
-```text
-2.9.3
-```
-
-`dry_run=true` 日志会显示：
-
-```text
-候选版本：上游=2.9.3 -> 目录=2.9.3
-预览创建版本：mtab/2.9.3；模板=2.9.5；镜像=itushan/mtab:2.9.3
-官方版本校验：以镜像仓库标签为准；官方版本=2.9.3；本地待修正=2.9.5
-预览删除非官方版本：mtab/2.9.5
-```
-
-真实执行后：
-
-```text
-apps/mtab/2.9.3
-apps/mtab/assets
-```
+8. 模板镜像不匹配时不创建新版本。
 
 ## 使用方式
 
@@ -133,8 +102,6 @@ Actions -> Docker Version Bot -> Run workflow -> dry_run=true
 应用配置
 候选来源
 候选版本
-digest 检查
-官方版本校验
 清理策略
 执行结果汇总
 ```

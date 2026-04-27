@@ -829,6 +829,31 @@ def find_existing_version(existing: Set[str], version_dir_name: str, allow_v_pre
     return None
 
 
+def find_existing_version_by_digest(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, Any], existing: Set[str], digest: str, image_tag: str) -> Optional[str]:
+    """latest 只有 digest 变化时，优先复用已存在的同 digest 版本目录。
+
+    解决 state 文件丢失后，已存在 20260427-abcdef123456 目录，
+    第二天又因同一 digest 生成 20260428-abcdef123456 重复目录的问题。
+    """
+    if not digest:
+        return None
+    digest12 = digest.replace("sha256:", "")[:12]
+    candidates = comparable_version_dirs_for_app(existing, app_cfg, config)
+
+    # 优先按目录名中的 digest12 匹配，例如 20260427-abcdef123456。
+    for name in candidates:
+        if digest12 and digest12.lower() in name.lower():
+            return name
+
+    # 其次读取 compose，确认是否已经固定到同一个 digest。
+    for name in candidates:
+        matched, needs_update = existing_version_digest_status(appstore_root, app_cfg, name, image_tag, digest)
+        if matched and not needs_update:
+            return name
+
+    return None
+
+
 def choose_source_version(app_dir: Path, configured: str) -> Optional[str]:
     if configured and configured != "auto":
         if (app_dir / configured).is_dir():
@@ -1273,6 +1298,27 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
         ctx = candidate_context(candidate)
         version_dir_name = context_format(template, ctx)
         existing_version = find_existing_version(existing, version_dir_name, allow_v_prefix_alias)
+        if (
+            not existing_version
+            and mode == "latest_digest"
+            and candidate.digest
+            and parse_bool(app_cfg.get("reuse_existing_digest_version", True), True)
+        ):
+            reused = find_existing_version_by_digest(
+                appstore_root,
+                app_cfg,
+                config,
+                existing,
+                candidate.digest,
+                candidate.image_tag or candidate.tag or "latest",
+            )
+            if reused:
+                skip_log(
+                    f"检测到相同 digest 已存在版本目录：{app_name}/{reused}；"
+                    f"复用该目录，避免重复创建 {version_dir_name}"
+                )
+                existing_version = reused
+                version_dir_name = reused
         candidate_label = candidate.github_tag or candidate.tag or candidate.version_value
         log(
             f"候选版本：上游={candidate_label} -> 目录={version_dir_name}；"

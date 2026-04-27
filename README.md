@@ -1,92 +1,49 @@
-# 1Panel Docker Version Bot v2.4
+# 1Panel Docker Version Bot v2.6
 
-这是用于维护 `mengfox/1panel-appstore` 的自动版本同步工具，当前默认配置针对多个 1Panel 应用：
+这是用于维护 `mengfox/1panel-appstore` 的自动版本同步工具，当前默认监控：
 
-- `rainbow-dnsmgr`：版本来源为 GitHub Release，镜像使用 `netcccyun/dnsmgr:latest` 并固定 `@sha256:digest`；
+- `rainbow-dnsmgr`：版本来源为 GitHub Release，镜像使用 `netcccyun/dnsmgr:latest`，并固定 `@sha256:digest`；
 - `next-terminal`：版本来源为 Docker Hub 标签，镜像使用 `dushixiang/next-terminal:<version>`；
+- `mtab`：版本来源为 Docker Hub 标签，镜像使用 `itushan/mtab:<version>`，并以 Docker Hub 官方镜像标签为准；
 - 所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
 
-## v2.4 本次新增
+## v2.6 本次重点
 
-### 新增 Next Terminal 监控更新
+### mtab 以官方镜像标签为准
 
-新增 `next-terminal` 应用监控配置：
+`mtab` 当前使用 Docker Hub 官方标签作为唯一版本来源。如果本地目录存在高于官方标签的历史版本，例如本地有 `2.9.5`，但 Docker Hub 官方稳定标签是 `2.9.3`，脚本会：
+
+1. 从现有可用模板目录复制生成 `2.9.3`；
+2. 将镜像改为 `itushan/mtab:2.9.3`；
+3. 删除本地非官方版本目录 `2.9.5`；
+4. 继续只保留最新 3 个官方版本；
+5. `dry_run=true` 时只预览，不会真正创建或删除。
+
+对应配置：
 
 ```json
 {
-  "app": "next-terminal",
+  "app": "mtab",
   "enabled": true,
   "mode": "docker_tag",
-  "image": "dushixiang/next-terminal",
-  "source_version": "latest",
+  "image": "itushan/mtab",
+  "source_version": "auto",
   "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
   "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
   "version_dir_template": "{clean_tag}",
   "max_new_versions": 1,
+  "backfill_missing_versions": false,
   "cleanup_old_versions": true,
   "keep_latest_versions": 3,
   "preserve_versions": ["latest"],
   "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
   "require_image_match": true,
-  "cleanup_when_no_candidates": false
+  "cleanup_when_no_candidates": false,
+  "skip_older_than_existing": false,
+  "official_versions_source_of_truth": true,
+  "prune_unofficial_versions": true
 }
 ```
-
-策略说明：
-
-1. 只跟踪 Docker Hub 上的稳定版本标签，例如 `v3.1.0`、`3.1.0`；
-2. 默认排除 `alpha`、`beta`、`rc`、`dev`、`nightly`、`snapshot`、`preview`、`canary`、`b4` 等预览/测试版本；
-3. 如果上游标签是 `v3.1.0`，生成目录为 `3.1.0`；
-4. 从 `apps/next-terminal/latest` 复制模板；
-5. 自动替换模板中的 `dushixiang/next-terminal:<旧版本>`；
-6. 只保留最新 3 个版本目录，永远保留 `latest` 模板目录。
-
-## v2.3 本次优化
-
-### 1. 兼容性和稳定性修复
-
-v2.3 在 v2.2 日志优化基础上继续修复长期运行细节：
-
-- `2.17` / `v2.17` / `V2.17` 统一视为同一个版本；
-- 旧版本清理的 `cleanup_include_regex` 改为大小写不敏感，避免 `V2.17` 漏清理；
-- `preserve_versions` 保护目录大小写不敏感，例如 `Latest` 也不会误删；
-- GitHub Release / Tag 分页请求统一走重试逻辑，减少 429 / 5xx / 网络抖动失败；
-- 清理旧版本函数去掉重复返回，代码更干净。
-
-### 2. 日志提示继续保留
-
-v2.2 起已优化 GitHub Actions 日志可读性：
-
-- 增加“运行环境”“应用检查”“执行结果汇总”分段；
-- GitHub Actions 中每个应用会自动折叠成一个 group；
-- dry-run 统一用 `🧪` 标识，真实执行统一用 `🚀` 标识；
-- 创建、更新、清理、跳过、警告都有明确图标；
-- 每个候选版本会输出“上游版本 -> 目标目录 -> 镜像标签 -> digest”；
-- 清理旧版本会明确显示“参与清理版本、保留版本、删除版本、保护目录”；
-- Warning / Error 会使用 GitHub Actions annotation，方便在 Actions 页面定位；
-- `GITHUB_STEP_SUMMARY` 会生成中文表格摘要，方便看整体结果。
-
-示例日志：
-
-```text
-[1Panel Version Bot] 🔷 运行环境
-[1Panel Version Bot] 🧪 运行模式：dry-run 预览模式，不会写入、删除、提交或推送文件
-[1Panel Version Bot] ⚙️ 应用配置：mode=github_release；image=netcccyun/dnsmgr；...
-[1Panel Version Bot] 🔍 候选版本：上游=v2.18 -> 目录=2.18；镜像标签=latest；digest=cccccccccccc
-[1Panel Version Bot] 🧪 预览创建版本：rainbow-dnsmgr/2.18；模板=latest；镜像=...
-[1Panel Version Bot] 🧪 预览删除旧版本：rainbow-dnsmgr/2.15
-[1Panel Version Bot] 🔷 执行结果汇总
-```
-
-### 3. 保留 v2.1 的安全策略
-
-- state 不再作为唯一跳过依据；
-- `include_regex` / `exclude_regex` 大小写不敏感；
-- `mode=github_release` 且 Release 为空时自动回退 Git Tag；
-- `require_image_match=true`，模板镜像不匹配时跳过创建；
-- `cleanup_when_no_candidates=false`，无候选版本时默认不清理旧版本；
-- HTTP 请求对 `429 / 5xx / 网络抖动` 增加轻量重试；
-- 每个应用只保留最新 3 个版本，`latest` 模板目录永远保留。
 
 ## 当前推荐策略
 
@@ -98,24 +55,56 @@ v2.2 起已优化 GitHub Actions 日志可读性：
   "cleanup_old_versions": true,
   "keep_latest_versions": 3,
   "preserve_versions": ["latest"],
-  "cleanup_include_regex": "^v?\\d+\\.\\d+(\\.\\d+)?$",
   "fallback_to_github_tags": true,
   "require_image_match": true,
-  "cleanup_when_no_candidates": false
+  "cleanup_when_no_candidates": false,
+  "skip_older_than_existing": true,
+  "official_versions_source_of_truth": false
 }
 ```
 
-含义：
+说明：
 
-1. 只跟踪上游最新 Release；
-2. 不回填历史版本；
-3. `2.17`、`v2.17`、`V2.17` 视为同一个版本；
-4. 如果版本目录已存在，但 Docker `latest` digest 变化，直接更新已有目录；
-5. 每个应用只保留最新 3 个版本；
-6. `latest` 模板目录永远保留；
-7. 清理旧版本时只处理版本号目录，避免误删 `assets`、`scripts`、`images` 等目录；
-8. 上游无候选版本时不清理旧版本；
-9. 模板镜像不匹配时不创建新版本。
+1. 默认只处理最新候选版本，不回填历史版本；
+2. `2.17`、`v2.17`、`V2.17` 视为同一个版本；
+3. 如果版本目录已存在，但 Docker `latest` digest 变化，会直接更新已有目录；
+4. 每个应用只保留最新 3 个版本；
+5. `latest` 模板目录永远保留；
+6. 清理旧版本时只处理版本号目录，避免误删 `assets`、`scripts`、`images` 等目录；
+7. 上游无候选版本时不清理旧版本；
+8. 模板镜像不匹配时不创建新版本；
+9. 对 `mtab` 可启用 `official_versions_source_of_truth=true`，按 Docker Hub 官方标签修正本地错误版本。
+
+## mtab 官方版本修正示例
+
+假设本地目录：
+
+```text
+apps/mtab/2.9.5
+apps/mtab/assets
+```
+
+Docker Hub 官方候选：
+
+```text
+2.9.3
+```
+
+`dry_run=true` 日志会显示：
+
+```text
+候选版本：上游=2.9.3 -> 目录=2.9.3
+预览创建版本：mtab/2.9.3；模板=2.9.5；镜像=itushan/mtab:2.9.3
+官方版本校验：以镜像仓库标签为准；官方版本=2.9.3；本地待修正=2.9.5
+预览删除非官方版本：mtab/2.9.5
+```
+
+真实执行后：
+
+```text
+apps/mtab/2.9.3
+apps/mtab/assets
+```
 
 ## 使用方式
 
@@ -125,7 +114,7 @@ v2.2 起已优化 GitHub Actions 日志可读性：
 Actions -> Docker Version Bot -> Run workflow -> dry_run=true
 ```
 
-重点看日志里的这些内容，尤其是 `rainbow-dnsmgr` 和 `next-terminal` 两个应用是否都进入检查：
+重点看日志：
 
 ```text
 运行模式
@@ -133,46 +122,16 @@ Actions -> Docker Version Bot -> Run workflow -> dry_run=true
 候选来源
 候选版本
 digest 检查
+官方版本校验
 清理策略
 执行结果汇总
 ```
 
-确认日志没问题后执行：
+确认待创建、待更新、待删除目录都正确后，再执行：
 
 ```text
 Actions -> Docker Version Bot -> Run workflow -> dry_run=false
 ```
-
-## 只保留最新 3 个版本
-
-示例目录：
-
-```text
-latest
-2.15
-2.16
-2.17
-2.18
-assets
-```
-
-执行后保留：
-
-```text
-latest
-2.16
-2.17
-2.18
-assets
-```
-
-删除：
-
-```text
-2.15
-```
-
-`dry_run=true` 时只预览，不会真正删除。
 
 ## GitHub Secrets
 

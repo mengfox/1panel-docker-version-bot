@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1Panel Docker Version Bot v2.3
+1Panel Docker Version Bot v2.6
 
 目标：
 - 默认只跟踪最新版本，不回填历史版本；
@@ -18,6 +18,7 @@
 - v2.1 增加 HTTP 重试、大小写不敏感版本过滤、Release 到 Tag 回退、state 安全兜底；
 - v2.2 完善 GitHub Actions 日志提示：分组、摘要、原因、动作结果和 dry-run 标识更清晰；
 - v2.3 修复 V 前缀大小写 alias、清理正则大小写、GitHub 分页请求重试和日志/状态细节；
+- v2.6 增加“官方镜像版本为准”策略：允许按 Docker Hub 官方标签降级/修正本地错误版本，并清理非官方版本目录；
 - 无第三方 Python 依赖，适合 GitHub Actions 直接运行。
 """
 
@@ -604,12 +605,40 @@ def cleanup_include_patterns_for_app(app_cfg: Dict[str, Any], config: Dict[str, 
     return [r"^v?\d+(?:\.\d+){1,3}$"]
 
 
+def comparable_version_dirs_for_app(existing: Iterable[str], app_cfg: Dict[str, Any], config: Dict[str, Any]) -> List[str]:
+    """返回可比较的版本目录，排除 latest、assets 等保护/非版本目录。"""
+    preserve = preserve_versions_for_app(app_cfg, config)
+    preserve_canon = {canonical_version_name(name) for name in preserve}
+    patterns = cleanup_include_patterns_for_app(app_cfg, config)
+    result: List[str] = []
+    for name in existing:
+        name = str(name)
+        if not name or name.startswith("."):
+            continue
+        if name in preserve or canonical_version_name(name) in preserve_canon:
+            continue
+        if regex_matches_any(name, patterns):
+            result.append(name)
+    return sorted(set(result), key=version_sort_key, reverse=True)
+
+
+def newest_existing_version(existing: Iterable[str], app_cfg: Dict[str, Any], config: Dict[str, Any]) -> Optional[str]:
+    versions = comparable_version_dirs_for_app(existing, app_cfg, config)
+    return versions[0] if versions else None
+
+
+def is_not_newer_than_existing(candidate_version: str, existing_version: str) -> bool:
+    """candidate 小于或等于当前最高版本时返回 True，用于避免自动降级创建。"""
+    return version_sort_key(candidate_version) <= version_sort_key(existing_version)
+
+
 def cleanup_old_versions(
     appstore_root: Path,
     app_cfg: Dict[str, Any],
     config: Dict[str, Any],
     dry_run: bool,
     extra_versions: Optional[Iterable[str]] = None,
+    exclude_versions: Optional[Iterable[str]] = None,
 ) -> List[str]:
     app_name = app_cfg["app"]
     app_dir = appstore_root / "apps" / app_name
@@ -627,6 +656,16 @@ def cleanup_old_versions(
     names = set(list_all_version_dirs(app_dir))
     if extra_versions:
         names.update(str(v) for v in extra_versions if str(v))
+    if exclude_versions:
+        exclude_names = set()
+        for item in exclude_versions:
+            raw = str(item)
+            if not raw:
+                continue
+            prefix = f"{app_name}/"
+            exclude_names.add(raw[len(prefix):] if raw.startswith(prefix) else raw)
+        if exclude_names:
+            names.difference_update(exclude_names)
 
     preserve_canon = {canonical_version_name(name) for name in preserve}
     protected = {
@@ -672,6 +711,91 @@ def cleanup_old_versions(
         deleted.append(f"{app_name}/{version}")
 
     return deleted
+
+
+def official_version_names_from_candidates(candidates: Iterable[VersionCandidate], template: str) -> List[str]:
+    """把上游官方候选版本转换为本地版本目录名。"""
+    names: List[str] = []
+    for candidate in candidates:
+        names.append(context_format(template, candidate_context(candidate)))
+    return sorted(set(names), key=version_sort_key, reverse=True)
+
+
+def prune_unofficial_versions(
+    appstore_root: Path,
+    app_cfg: Dict[str, Any],
+    config: Dict[str, Any],
+    dry_run: bool,
+    official_versions: Iterable[str],
+    extra_versions: Optional[Iterable[str]] = None,
+) -> List[str]:
+    """按上游官方镜像标签清理本地不存在于官方列表中的版本目录。
+
+    适合 mTab 这类本地历史版本可能写高、但 Docker Hub 官方标签较低的场景。
+    该逻辑只在存在官方候选版本时运行；无候选版本时不执行，避免接口异常导致误删。
+    """
+    app_name = app_cfg["app"]
+    app_dir = appstore_root / "apps" / app_name
+    if not app_dir.is_dir():
+        return []
+
+    enabled = parse_bool(
+        app_cfg.get("official_versions_source_of_truth", app_cfg.get("prune_unofficial_versions", config.get("official_versions_source_of_truth", False))),
+        False,
+    )
+    if not enabled:
+        return []
+
+    official_names = {str(v) for v in official_versions if str(v)}
+    if extra_versions:
+        official_names.update(str(v) for v in extra_versions if str(v))
+    if not official_names:
+        skip_log(f"{app_name} 官方版本列表为空：不执行非官方版本清理，避免误删")
+        return []
+
+    preserve = preserve_versions_for_app(app_cfg, config)
+    preserve_canon = {canonical_version_name(name) for name in preserve}
+    cleanup_patterns = cleanup_include_patterns_for_app(app_cfg, config)
+    official_canon = {canonical_version_name(name) for name in official_names}
+
+    names = set(list_all_version_dirs(app_dir))
+    cleanup_candidates = [
+        name for name in names
+        if name not in preserve
+        and canonical_version_name(name) not in preserve_canon
+        and not name.startswith(".")
+        and regex_matches_any(name, cleanup_patterns)
+    ]
+    unofficial = sorted(
+        [name for name in cleanup_candidates if canonical_version_name(name) not in official_canon],
+        key=version_sort_key,
+        reverse=True,
+    )
+
+    log(
+        f"官方版本校验：以镜像仓库标签为准；官方版本={format_items(sorted(official_names, key=version_sort_key, reverse=True))}；"
+        f"本地待修正={format_items(unofficial)}",
+        "🧾",
+    )
+
+    if not unofficial:
+        success(f"{app_name} 官方版本校验通过：没有发现非官方版本目录")
+        return []
+
+    action_log(f"{app_name} 将清理非官方版本目录：{format_items(unofficial)}", dry_run)
+    deleted: List[str] = []
+    for version in unofficial:
+        path = app_dir / version
+        action_log(f"{'预览删除' if dry_run else '删除'}非官方版本：{app_name}/{version}", dry_run)
+        if not dry_run:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                warn(f"待删除目录不存在，跳过：{app_name}/{version}")
+                continue
+        deleted.append(f"{app_name}/{version}")
+    return deleted
+
 
 def list_template_dirs(app_dir: Path) -> List[str]:
     if not app_dir.exists():
@@ -1093,17 +1217,30 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
     policy = str(app_cfg.get("on_existing_digest_change", config.get("on_existing_digest_change", "skip")))
     keep_latest_versions = parse_non_negative_int(app_cfg.get("keep_latest_versions", config.get("keep_latest_versions", 0)), 0, f"{app_name}.keep_latest_versions")
     cleanup_enabled = parse_bool(app_cfg.get("cleanup_old_versions", config.get("cleanup_old_versions", keep_latest_versions > 0)), keep_latest_versions > 0)
+    official_versions_source_of_truth = parse_bool(
+        app_cfg.get("official_versions_source_of_truth", app_cfg.get("prune_unofficial_versions", config.get("official_versions_source_of_truth", False))),
+        False,
+    )
+    skip_older_than_existing = parse_bool(
+        app_cfg.get("skip_older_than_existing", config.get("skip_older_than_existing", True)),
+        True,
+    )
+    if official_versions_source_of_truth and "skip_older_than_existing" not in app_cfg:
+        # 既然以上游官方镜像标签为准，就允许把本地错误写高的版本修正为官方版本。
+        skip_older_than_existing = False
     max_new_default = parse_non_negative_int(config.get("max_new_versions_per_app", 1), 1, "max_new_versions_per_app")
     max_new = parse_non_negative_int(args.max_new if args.max_new is not None else app_cfg.get("max_new_versions", max_new_default), max_new_default, f"{app_name}.max_new_versions")
 
     log(
         f"应用配置：mode={mode}；image={image}；track_tag={track_tag}；source_version={source_version}；"
         f"目录模板={template}；digest策略={policy}；回填历史={backfill_missing_versions}；"
-        f"max_new={max_new}；清理旧版={cleanup_enabled}；保留最新={keep_latest_versions}",
+        f"max_new={max_new}；清理旧版={cleanup_enabled}；保留最新={keep_latest_versions}；"
+        f"禁止降级创建={skip_older_than_existing}；官方版本为准={official_versions_source_of_truth}",
         "⚙️",
     )
 
     candidates = candidates_for_app(app_cfg, config, state)
+    all_candidates = list(candidates)
     if not candidates:
         if parse_bool(app_cfg.get("cleanup_when_no_candidates", config.get("cleanup_when_no_candidates", False)), False):
             warn(f"{app_name} 无候选版本，但 cleanup_when_no_candidates=true，将继续执行旧版本清理")
@@ -1115,6 +1252,8 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
 
     existing = set(list_all_version_dirs(app_dir))
     log(f"现有目录：{format_items(sorted(existing, key=version_sort_key))}", "📁")
+
+    official_version_names = official_version_names_from_candidates(all_candidates, template)
 
     if not backfill_missing_versions:
         candidates = candidates[:1]
@@ -1203,6 +1342,18 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
                 break
             continue
 
+        if skip_older_than_existing:
+            newest_existing = newest_existing_version(existing, app_cfg, config)
+            if newest_existing and is_not_newer_than_existing(version_dir_name, newest_existing):
+                skip_log(
+                    f"候选版本不是更新版本，已跳过：{app_name}/{version_dir_name}；"
+                    f"当前最高版本={newest_existing}；避免 Docker Hub 标签回退或本地版本更高时自动降级"
+                )
+                skipped.append(f"{app_name}: 候选版本 {version_dir_name} 不高于当前最高版本 {newest_existing}，跳过")
+                if not backfill_missing_versions:
+                    break
+                continue
+
         if new_count >= max_new:
             skipped.append(f"{app_name}: 达到 max_new_versions={max_new}，停止创建")
             break
@@ -1231,9 +1382,25 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
         if not backfill_missing_versions:
             break
 
-    deleted = cleanup_old_versions(appstore_root, app_cfg, config, dry_run, extra_versions=planned_version_dirs)
-    success(f"应用处理完成：新建={len(created)}，更新={len(updated)}，清理={len(deleted)}，跳过={len(skipped)}")
-    return created, updated, deleted, skipped
+    pruned = prune_unofficial_versions(
+        appstore_root,
+        app_cfg,
+        config,
+        dry_run,
+        official_versions=official_version_names,
+        extra_versions=planned_version_dirs,
+    )
+    deleted = cleanup_old_versions(
+        appstore_root,
+        app_cfg,
+        config,
+        dry_run,
+        extra_versions=planned_version_dirs,
+        exclude_versions=pruned,
+    )
+    all_deleted = pruned + deleted
+    success(f"应用处理完成：新建={len(created)}，更新={len(updated)}，清理={len(all_deleted)}，跳过={len(skipped)}")
+    return created, updated, all_deleted, skipped
 
 
 def main() -> None:

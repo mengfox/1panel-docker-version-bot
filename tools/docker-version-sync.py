@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1Panel Docker Version Bot v2.6
+1Panel Docker Version Bot v3.3
 
 目标：
 - 默认只跟踪最新版本，不回填历史版本；
@@ -19,6 +19,9 @@
 - v2.2 完善 GitHub Actions 日志提示：分组、摘要、原因、动作结果和 dry-run 标识更清晰；
 - v2.3 修复 V 前缀大小写 alias、清理正则大小写、GitHub 分页请求重试和日志/状态细节；
 - v2.6 增加“官方镜像版本为准”策略：允许按 Docker Hub 官方标签降级/修正本地错误版本，并清理非官方版本目录；
+- v3.2 增加模板目录自动回退：source_version 指定目录不存在时，可自动使用 latest 或已有最高版本作为模板；
+- v3.3 增加安全清理保护：新官方版本未成功创建/不存在时，不清理旧的非官方版本，避免应用被清空；
+- v3.3 修复 max_new=0 被非回填模式强制改为 1 的问题，支持只检查/只清理场景；
 - 无第三方 Python 依赖，适合 GitHub Actions 直接运行。
 """
 
@@ -733,6 +736,40 @@ def official_version_names_from_candidates(candidates: Iterable[VersionCandidate
     return sorted(set(names), key=version_sort_key, reverse=True)
 
 
+
+
+def official_target_available(
+    appstore_root: Path,
+    app_cfg: Dict[str, Any],
+    official_versions: Iterable[str],
+    extra_versions: Optional[Iterable[str]] = None,
+) -> bool:
+    """确认本地或本次计划中至少存在一个官方版本目录。
+
+    开启 official_versions_source_of_truth/prune_unofficial_versions 时，如果候选官方版本
+    因模板缺失、镜像不匹配等原因没有创建成功，不能继续删除旧版本。否则可能出现：
+    本地只有 1.5.0.0 -> 上游最新 1.5.0.1 -> 创建失败 -> 又把 1.5.0.0 当非官方删掉，
+    最终应用目录没有任何可用版本。
+    """
+    app_name = app_cfg["app"]
+    app_dir = appstore_root / "apps" / app_name
+    official_canon = {canonical_version_name(v) for v in official_versions if str(v)}
+    if not official_canon:
+        return False
+
+    available = set(list_all_version_dirs(app_dir))
+    if extra_versions:
+        for item in extra_versions:
+            raw = str(item)
+            if not raw:
+                continue
+            prefix = f"{app_name}/"
+            available.add(raw[len(prefix):] if raw.startswith(prefix) else raw)
+
+    available_canon = {canonical_version_name(v) for v in available if str(v)}
+    return bool(official_canon & available_canon)
+
+
 def prune_unofficial_versions(
     appstore_root: Path,
     app_cfg: Dict[str, Any],
@@ -763,6 +800,17 @@ def prune_unofficial_versions(
         official_names.update(str(v) for v in extra_versions if str(v))
     if not official_names:
         skip_log(f"{app_name} 官方版本列表为空：不执行非官方版本清理，避免误删")
+        return []
+
+    safe_prune = parse_bool(
+        app_cfg.get("safe_prune_requires_official_target", config.get("safe_prune_requires_official_target", True)),
+        True,
+    )
+    if safe_prune and not official_target_available(appstore_root, app_cfg, official_names, extra_versions):
+        warn(
+            f"{app_name} 未检测到任何已存在或本次已计划创建的官方版本目录；"
+            "为避免删除最后一个可用版本，已跳过非官方版本清理"
+        )
         return []
 
     preserve = preserve_versions_for_app(app_cfg, config)
@@ -866,13 +914,68 @@ def find_existing_version_by_digest(appstore_root: Path, app_cfg: Dict[str, Any]
     return None
 
 
-def choose_source_version(app_dir: Path, configured: str) -> Optional[str]:
+def source_version_candidates_for_app(app_cfg: Dict[str, Any], config: Dict[str, Any]) -> List[str]:
+    """
+    生成模板目录选择顺序。
+
+    约定：
+    - 具体目录名：优先使用该目录，例如 latest、2.9.5、1.5.0.0；
+    - auto：从所有可用模板目录中选择语义化版本最高的目录。
+
+    默认顺序是 latest -> auto。这样有 latest 模板时优先使用模板，
+    没有 latest 时自动使用现有最高版本目录作为模板。
+    """
+    raw = app_cfg.get("source_version_candidates", config.get("source_version_candidates", ["latest", "auto"]))
+    candidates = normalize_string_list(raw, ["latest", "auto"])
+    if not candidates:
+        candidates = ["latest", "auto"]
+    result: List[str] = []
+    for item in candidates:
+        item = str(item).strip()
+        if item and item not in result:
+            result.append(item)
+    if "auto" not in result:
+        result.append("auto")
+    return result
+
+
+def choose_source_version(app_dir: Path, configured: str, app_cfg: Dict[str, Any], config: Dict[str, Any]) -> Optional[str]:
+    """选择可复制的模板目录。
+
+    旧逻辑：source_version 指向 latest 时，如果 latest 不存在就直接失败。
+    新逻辑：允许自动回退到其他可用版本目录，适合没有 latest 模板、
+    只有 1.5.0.0 / 2.9.5 这类版本目录的应用。
+    """
+    configured = str(configured or "auto").strip()
+    allow_fallback = parse_bool(app_cfg.get("allow_source_version_fallback", config.get("allow_source_version_fallback", True)), True)
+
+    def has_template(name: str) -> bool:
+        d = app_dir / name
+        return d.is_dir() and bool(compose_files(d))
+
     if configured and configured != "auto":
-        if (app_dir / configured).is_dir():
+        if has_template(configured):
             return configured
-        return None
-    versions = list_template_dirs(app_dir)
-    return versions[0] if versions else None
+        if not allow_fallback:
+            return None
+        warn(f"配置的源版本目录不存在或缺少 docker-compose：{app_dir.name}/{configured}；将自动尝试其他模板目录")
+        candidates = [x for x in source_version_candidates_for_app(app_cfg, config) if x != configured]
+    else:
+        candidates = source_version_candidates_for_app(app_cfg, config)
+
+    for item in candidates:
+        if item == "auto":
+            versions = list_template_dirs(app_dir)
+            if versions:
+                selected = versions[0]
+                success(f"已自动选择模板目录：{app_dir.name}/{selected}")
+                return selected
+            continue
+        if has_template(item):
+            success(f"已选择模板目录：{app_dir.name}/{item}")
+            return item
+
+    return None
 
 
 def image_candidates(image: str) -> List[str]:
@@ -1022,7 +1125,7 @@ def candidate_context(candidate: VersionCandidate) -> Dict[str, str]:
     }
 
 
-def create_version(appstore_root: Path, app_cfg: Dict[str, Any], new_version_name: str, image_version_for_compose: str, digest: Optional[str], dry_run: bool) -> bool:
+def create_version(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, Any], new_version_name: str, image_version_for_compose: str, digest: Optional[str], dry_run: bool) -> bool:
     app_name = app_cfg["app"]
     image = app_cfg["image"]
     app_dir = appstore_root / "apps" / app_name
@@ -1030,9 +1133,9 @@ def create_version(appstore_root: Path, app_cfg: Dict[str, Any], new_version_nam
         warn(f"应用目录不存在：apps/{app_name}；已跳过该应用")
         return False
 
-    source_version = choose_source_version(app_dir, app_cfg.get("source_version", "auto"))
+    source_version = choose_source_version(app_dir, app_cfg.get("source_version", "auto"), app_cfg, config)
     if not source_version:
-        warn(f"找不到可复制的源版本目录：{app_name}；请检查 source_version 或 latest 模板目录")
+        warn(f"找不到可复制的源版本目录：{app_name}；请检查 source_version、source_version_candidates 或现有版本目录是否包含 docker-compose.yml")
         return False
 
     src_dir = app_dir / source_version
@@ -1294,8 +1397,7 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
 
     if not backfill_missing_versions:
         candidates = candidates[:1]
-        max_new = 1
-        log("版本策略：只处理最新候选版本，不回填历史版本", "🧭")
+        log(f"版本策略：只处理最新候选版本，不回填历史版本；max_new={max_new}", "🧭")
     else:
         log(f"版本策略：允许回填缺失版本，最多创建 {max_new} 个", "🧭")
 
@@ -1367,7 +1469,7 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
                         skipped.append(f"{app_name}: digest 版本已存在 {digest_version_name}")
                     elif new_count < max_new:
                         action_log(f"digest 已变化，将创建 digest 版本目录：{app_name}/{digest_version_name}", dry_run)
-                        ok = create_version(appstore_root, app_cfg, digest_version_name, image_tag, candidate.digest or None, dry_run)
+                        ok = create_version(appstore_root, app_cfg, config, digest_version_name, image_tag, candidate.digest or None, dry_run)
                         if ok:
                             created.append(f"{app_name}/{digest_version_name}")
                             planned_version_dirs.append(digest_version_name)
@@ -1417,7 +1519,7 @@ def process_app(appstore_root: Path, app_cfg: Dict[str, Any], config: Dict[str, 
             break
 
         action_log(f"准备创建新版本目录：{app_name}/{version_dir_name}", dry_run)
-        ok = create_version(appstore_root, app_cfg, version_dir_name, candidate.image_tag or candidate.tag or "latest", candidate.digest or None, dry_run)
+        ok = create_version(appstore_root, app_cfg, config, version_dir_name, candidate.image_tag or candidate.tag or "latest", candidate.digest or None, dry_run)
         if ok:
             created.append(f"{app_name}/{version_dir_name}")
             planned_version_dirs.append(version_dir_name)

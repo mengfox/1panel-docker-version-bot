@@ -35,7 +35,13 @@
       "fallback_to_github_tags": true,
       "require_image_match": true,
       "cleanup_when_no_candidates": false,
-      "official_versions_source_of_truth": false
+      "official_versions_source_of_truth": false,
+      "allow_source_version_fallback": true,
+      "source_version_candidates": [
+        "latest",
+        "auto"
+      ],
+      "safe_prune_requires_official_target": true
     },
     {
       "app": "next-terminal",
@@ -56,7 +62,13 @@
       "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
       "require_image_match": true,
       "cleanup_when_no_candidates": false,
-      "official_versions_source_of_truth": false
+      "official_versions_source_of_truth": false,
+      "allow_source_version_fallback": true,
+      "source_version_candidates": [
+        "latest",
+        "auto"
+      ],
+      "safe_prune_requires_official_target": true
     },
     {
       "app": "zdir",
@@ -83,14 +95,20 @@
       "skip_older_than_existing": false,
       "official_versions_source_of_truth": true,
       "prune_unofficial_versions": true,
-      "pin_digest": false
+      "pin_digest": false,
+      "allow_source_version_fallback": true,
+      "source_version_candidates": [
+        "latest",
+        "auto"
+      ],
+      "safe_prune_requires_official_target": true
     },
     {
       "app": "xarrpay-merchant",
       "enabled": true,
       "mode": "docker_tag",
       "image": "xarrpay/xarrpay-merchant",
-      "source_version": "latest",
+      "source_version": "auto",
       "include_regex": "^v?\\d+(\\.\\d+){2,3}$",
       "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
       "version_dir_template": "{clean_tag}",
@@ -110,7 +128,13 @@
       "skip_older_than_existing": false,
       "official_versions_source_of_truth": true,
       "prune_unofficial_versions": true,
-      "pin_digest": false
+      "pin_digest": false,
+      "allow_source_version_fallback": true,
+      "source_version_candidates": [
+        "latest",
+        "auto"
+      ],
+      "safe_prune_requires_official_target": true
     }
   ],
   "cleanup_old_versions": true,
@@ -123,5 +147,11 @@
   "require_image_match": true,
   "cleanup_when_no_candidates": false,
   "skip_older_than_existing": true,
-  "official_versions_source_of_truth": false
+  "official_versions_source_of_truth": false,
+  "allow_source_version_fallback": true,
+  "source_version_candidates": [
+    "latest",
+    "auto"
+  ],
+  "safe_prune_requires_official_target": true
 }

@@ -1,4 +1,4 @@
-# 1Panel Docker Version Bot - v3.0
+# 1Panel Docker Version Bot - v3.1
 
 用于独立 Public 仓库，自动检查 Docker Hub / GitHub Release / GitHub Tag / latest digest，并把新版本同步到目标 `1Panel AppStore` 仓库。
 
@@ -6,9 +6,60 @@
 
 - `rainbow-dnsmgr`：使用 GitHub Release 作为版本来源，镜像固定 `latest` digest；
 - `next-terminal`：使用 Docker Hub 版本标签作为版本来源；
-- `zdir`：使用 Docker Hub 版本标签作为版本来源，不再使用 `latest` digest 生成日期目录。
+- `zdir`：使用 Docker Hub 版本标签作为版本来源，不再使用 `latest` digest 生成日期目录；
+- `xarrpay-merchant`：使用 Docker Hub 版本标签作为版本来源，支持 `1.5.0.0` 这类四段版本号。
 
 所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
+
+
+
+## v3.1 本次新增
+
+新增 `xarrpay-merchant` 应用监控：
+
+```text
+xarrpay/xarrpay-merchant:<version>
+```
+
+策略：
+
+1. 读取 Docker Hub `xarrpay/xarrpay-merchant` 的 Tag 列表；
+2. 只匹配稳定版本号，例如 `1.5.0.0`、`1.5.0.1`；
+3. 支持三段和四段版本号，避免 `1.5.0.10` 与 `1.5.0.2` 排序错误；
+4. 从 `apps/xarrpay-merchant/latest` 模板复制新目录；
+5. 自动把镜像改为 `xarrpay/xarrpay-merchant:<version>`；
+6. 以 Docker Hub 标签为准，可清理非官方版本目录；
+7. 只保留最新 3 个版本目录，`latest` 永远保留。
+
+## xarrpay-merchant 配置
+
+```json
+{
+  "app": "xarrpay-merchant",
+  "enabled": true,
+  "mode": "docker_tag",
+  "image": "xarrpay/xarrpay-merchant",
+  "source_version": "latest",
+  "include_regex": "^v?\\d+(\\.\\d+){2,3}$",
+  "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|b\\d+)",
+  "version_dir_template": "{clean_tag}",
+  "max_new_versions": 1,
+  "backfill_missing_versions": false,
+  "cleanup_old_versions": true,
+  "keep_latest_versions": 3,
+  "preserve_versions": ["latest"],
+  "cleanup_include_regex": [
+    "^v?\\d+(\\.\\d+){2,3}$",
+    "^\\d{8}-[a-fA-F0-9]{12}$"
+  ],
+  "require_image_match": true,
+  "cleanup_when_no_candidates": false,
+  "skip_older_than_existing": false,
+  "official_versions_source_of_truth": true,
+  "prune_unofficial_versions": true,
+  "pin_digest": false
+}
+```
 
 ## v3.0 本次修正
 

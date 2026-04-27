@@ -446,18 +446,30 @@ def fetch_image_digest(image: str, tag: str = "latest") -> str:
     return ""
 
 
-SEMVER_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-._+].*)?$", re.IGNORECASE)
+SEMVER_RE = re.compile(r"^v?(\d+(?:\.\d+)*)(.*)$", re.IGNORECASE)
+PRERELEASE_WORDS = ["alpha", "beta", "rc", "dev", "nightly", "snapshot", "preview", "canary", "test"]
 
 
-def version_sort_key(value: str) -> Tuple[int, int, int, int, str]:
-    m = SEMVER_RE.match(value)
+def version_sort_key(value: str) -> Tuple[int, Tuple[int, ...], str]:
+    """
+    版本排序键。
+
+    支持 2 段、3 段、4 段版本号，例如 2.17、3.1.1、1.5.0.0。
+    旧版只解析到 major/minor/patch，遇到 XArrPay 这类 1.5.0.0 版本时，
+    1.5.0.10 和 1.5.0.2 可能无法准确排序。这里解析全部数字段，
+    并补齐长度，保证长期自动更新时不会误判新旧版本。
+    """
+    raw = str(value or "").strip()
+    m = SEMVER_RE.match(raw)
     if not m:
-        return (0, 0, 0, 0, value)
-    major = int(m.group(1) or 0)
-    minor = int(m.group(2) or 0)
-    patch = int(m.group(3) or 0)
-    stable = 0 if any(x in value.lower() for x in ["alpha", "beta", "rc", "dev", "nightly", "snapshot"]) else 1
-    return (stable, major, minor, patch, value)
+        return (0, tuple([0] * 8), raw.lower())
+
+    number_part = m.group(1) or "0"
+    suffix = (m.group(2) or "").lower()
+    nums = [int(x) for x in number_part.split(".") if x.isdigit()]
+    nums = (nums + [0] * 8)[:8]
+    stable = 0 if any(x in suffix or x in raw.lower() for x in PRERELEASE_WORDS) else 1
+    return (stable, tuple(nums), raw.lower())
 
 
 def strip_v_prefix(value: str) -> str:

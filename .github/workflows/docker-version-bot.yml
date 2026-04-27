@@ -2,6 +2,7 @@ name: Docker Version Bot
 
 on:
   schedule:
+    # 每 2 小时执行一次。GitHub Actions schedule 使用 UTC 时间。
     - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
@@ -38,12 +39,12 @@ jobs:
 
     steps:
       - name: Checkout bot repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: bot
 
       - name: Checkout 1Panel AppStore repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.APPSTORE_REPO }}
           ref: ${{ env.APPSTORE_BRANCH }}
@@ -58,13 +59,17 @@ jobs:
           git checkout -B "${APPSTORE_BRANCH}" "origin/${APPSTORE_BRANCH}"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Validate Python syntax
         run: |
+          set -euo pipefail
           python3 -m py_compile bot/tools/docker-version-sync.py
+          if [ -f bot/tools/cleanup-workflow-runs.py ]; then
+            python3 -m py_compile bot/tools/cleanup-workflow-runs.py
+          fi
 
       - name: Dry run preview
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true' }}
@@ -78,7 +83,7 @@ jobs:
           EXTRA_ARGS=()
           if [ -n "${MAX_NEW_INPUT:-}" ]; then
             if ! echo "$MAX_NEW_INPUT" | grep -Eq '^[0-9]+$'; then
-              echo "max_new must be a non-negative integer" >&2
+              echo "::error::max_new must be a non-negative integer"
               exit 1
             fi
             EXTRA_ARGS=(--max-new "$MAX_NEW_INPUT")
@@ -102,7 +107,7 @@ jobs:
           EXTRA_ARGS=()
           if [ -n "${MAX_NEW_INPUT:-}" ]; then
             if ! echo "$MAX_NEW_INPUT" | grep -Eq '^[0-9]+$'; then
-              echo "max_new must be a non-negative integer" >&2
+              echo "::error::max_new must be a non-negative integer"
               exit 1
             fi
             EXTRA_ARGS=(--max-new "$MAX_NEW_INPUT")
@@ -128,7 +133,7 @@ jobs:
 
     steps:
       - name: Checkout bot repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: bot
 
@@ -137,6 +142,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          if [ ! -f bot/tools/cleanup-workflow-runs.py ]; then
+            echo "::warning::缺少 bot/tools/cleanup-workflow-runs.py，已跳过工作流记录清理。请更新到包含该脚本的版本。"
+            exit 0
+          fi
+
+          set +e
           python3 bot/tools/cleanup-workflow-runs.py \
             --repo "${GITHUB_REPOSITORY}" \
             --workflow "docker-version-bot.yml" \
@@ -144,4 +156,10 @@ jobs:
             --keep-failure-days 3 \
             --exclude-run-id "${GITHUB_RUN_ID}" \
             --delete-records
+          status=$?
+          set -e
 
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::工作流记录清理失败，退出码：${status}。主同步任务已完成，本次不会因为清理失败而标记失败。"
+          fi
+          exit 0

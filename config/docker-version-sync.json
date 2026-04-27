@@ -135,6 +135,36 @@
         "auto"
       ],
       "safe_prune_requires_official_target": true
+    },
+    {
+      "app": "netbird-client",
+      "enabled": true,
+      "mode": "docker_tag",
+      "image": "netbirdio/netbird",
+      "source_version": "auto",
+      "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+      "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|rootless|amd64|arm64|armv?7|arm|latest)",
+      "version_dir_template": "{clean_tag}",
+      "max_new_versions": 1,
+      "backfill_missing_versions": false,
+      "cleanup_old_versions": true,
+      "keep_latest_versions": 3,
+      "preserve_versions": [
+        "latest"
+      ],
+      "cleanup_include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+      "require_image_match": true,
+      "cleanup_when_no_candidates": false,
+      "skip_older_than_existing": false,
+      "official_versions_source_of_truth": true,
+      "prune_unofficial_versions": true,
+      "pin_digest": false,
+      "allow_source_version_fallback": true,
+      "source_version_candidates": [
+        "latest",
+        "auto"
+      ],
+      "safe_prune_requires_official_target": true
     }
   ],
   "cleanup_old_versions": true,

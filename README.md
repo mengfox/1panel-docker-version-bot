@@ -1,4 +1,4 @@
-# 1Panel Docker Version Bot - v3.3
+# 1Panel Docker Version Bot - v3.7
 
 用于独立 Public 仓库，自动检查 Docker Hub / GitHub Release / GitHub Tag / latest digest，并把新版本同步到目标 `1Panel AppStore` 仓库。
 
@@ -7,12 +7,55 @@
 - `rainbow-dnsmgr`：使用 GitHub Release 作为版本来源，镜像固定 `latest` digest；
 - `next-terminal`：使用 Docker Hub 版本标签作为版本来源；
 - `zdir`：使用 Docker Hub 版本标签作为版本来源，不再使用 `latest` digest 生成日期目录；
-- `xarrpay-merchant`：使用 Docker Hub 版本标签作为版本来源，支持 `1.5.0.0` 这类四段版本号。
+- `xarrpay-merchant`：使用 Docker Hub 版本标签作为版本来源，支持 `1.5.0.0` 这类四段版本号；
+- `netbird-client`：使用 Docker Hub `netbirdio/netbird` 标准版本标签作为版本来源，排除 rootless/架构专用/latest 标签。
 
 所有应用默认只保留最新 3 个版本，并保留 `latest` 模板目录。
 
 
 
+
+
+
+## v3.7 本次新增
+
+新增 `netbird-client` 应用监控：
+
+```text
+netbirdio/netbird:<version>
+```
+
+策略：
+
+1. 读取 Docker Hub `netbirdio/netbird` 的 Tag 列表；
+2. 只匹配标准版本号，例如 `0.68.3`、`v0.68.2`；
+3. 排除 `latest`、`rootless-latest`、`0.68.3-rootless`、`0.68.3-amd64`、`0.68.3-arm64v8` 等变体标签；
+4. `apps/netbird-client/latest` 不存在时，会自动使用已有最高版本目录作为模板，例如 `1.0.0`；
+5. 自动把镜像改为 `netbirdio/netbird:<version>`；
+6. 以 Docker Hub 官方标签为准，可清理旧的非官方包版本目录；
+7. 只保留最新 3 个版本目录。
+
+## netbird-client 配置
+
+```json
+{
+  "app": "netbird-client",
+  "enabled": true,
+  "mode": "docker_tag",
+  "image": "netbirdio/netbird",
+  "source_version": "auto",
+  "include_regex": "^v?\\d+\\.\\d+\\.\\d+$",
+  "exclude_regex": "(alpha|beta|rc|dev|nightly|snapshot|preview|canary|test|rootless|amd64|arm64|armv?7|arm|latest)",
+  "version_dir_template": "{clean_tag}",
+  "cleanup_old_versions": true,
+  "keep_latest_versions": 3,
+  "official_versions_source_of_truth": true,
+  "prune_unofficial_versions": true,
+  "pin_digest": false,
+  "allow_source_version_fallback": true,
+  "source_version_candidates": ["latest", "auto"]
+}
+```
 
 ## v3.3 模板目录回退修复
 

@@ -1306,6 +1306,82 @@ def git_has_changes(repo_root: Path) -> bool:
     return bool(run_capture(["git", "status", "--porcelain"], cwd=repo_root))
 
 
+
+def split_app_version(item: str) -> Tuple[str, str]:
+    """从 app/version 或 app/version extra 中提取应用名和版本号。"""
+    raw = str(item).strip()
+    if not raw or "/" not in raw:
+        return raw, ""
+    app, rest = raw.split("/", 1)
+    version = rest.split()[0].strip()
+    return app, version
+
+
+def build_commit_subject(created: List[str], updated: List[str], deleted: List[str], max_items: int = 3) -> str:
+    """生成更清晰的 Git commit 标题，GitHub 文件列表会直接显示这个标题。"""
+    actions: List[str] = []
+
+    for item in created:
+        app, version = split_app_version(item)
+        if app and version:
+            actions.append(f"{app} to {version}")
+        elif item:
+            actions.append(str(item))
+
+    if not actions:
+        for item in updated:
+            app, version = split_app_version(item)
+            if app and version:
+                actions.append(f"{app} {version} digest")
+            elif item:
+                actions.append(str(item))
+
+    if actions:
+        shown = actions[:max_items]
+        suffix = f" and {len(actions) - max_items} more" if len(actions) > max_items else ""
+        return "chore(appstore): update " + ", ".join(shown) + suffix
+
+    if deleted:
+        apps: List[str] = []
+        seen: Set[str] = set()
+        for item in deleted:
+            app, _ = split_app_version(item)
+            if app and app not in seen:
+                apps.append(app)
+                seen.add(app)
+        if apps:
+            shown = apps[:max_items]
+            suffix = f" and {len(apps) - max_items} more" if len(apps) > max_items else ""
+            return "chore(appstore): cleanup old versions for " + ", ".join(shown) + suffix
+        return "chore(appstore): cleanup old app versions"
+
+    return "chore(appstore): sync docker image versions"
+
+
+def build_commit_body(created: List[str], updated: List[str], deleted: List[str], skipped: List[str]) -> str:
+    lines = [
+        "Docker Version Bot 自动同步结果",
+        "",
+        f"- 新建版本：{len(created)}",
+        f"- 更新已有版本：{len(updated)}",
+        f"- 清理旧版本：{len(deleted)}",
+        f"- 跳过/提示：{len(skipped)}",
+        "",
+    ]
+    sections = [
+        ("新建版本", created),
+        ("更新已有版本", updated),
+        ("清理旧版本", deleted),
+    ]
+    for title, values in sections:
+        if values:
+            lines.append(f"## {title}")
+            lines.extend([f"- {item}" for item in values[:30]])
+            if len(values) > 30:
+                lines.append(f"- ... 共 {len(values)} 项")
+            lines.append("")
+    return "\n".join(lines).strip()
+
 def write_summary(created: List[str], updated: List[str], deleted: List[str], skipped: List[str], dry_run: bool) -> None:
     summary_path = os.getenv("GITHUB_STEP_SUMMARY")
     if not summary_path:
@@ -1642,8 +1718,10 @@ def main() -> None:
         if git_has_changes(appstore_root):
             action_log("检测到文件变更，准备提交", False)
             run(["git", "add", "apps", state_file], cwd=appstore_root)
-            run(["git", "commit", "-m", config.get("commit_message", "chore: sync docker image versions")], cwd=appstore_root)
-            success("Git commit 完成")
+            commit_subject = build_commit_subject(created_all, updated_all, deleted_all)
+            commit_body = build_commit_body(created_all, updated_all, deleted_all, skipped_all)
+            run(["git", "commit", "-m", commit_subject, "-m", commit_body], cwd=appstore_root)
+            success(f"Git commit 完成：{commit_subject}")
         else:
             success("没有文件变更，无需 commit")
 

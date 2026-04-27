@@ -251,3 +251,18 @@ permissions:
   contents: read
   actions: write
 ```
+
+## v3.5 提交记录优化
+
+GitHub 文件列表现在不会再只显示 `chore: sync docker image versions`。
+
+脚本会根据本次同步结果自动生成清晰的提交标题，例如：
+
+```text
+chore(appstore): update xarrpay-merchant to 1.5.0.3
+chore(appstore): update zdir to 0.3.6, next-terminal to 3.1.1
+chore(appstore): update rainbow-dnsmgr 2.17 digest
+chore(appstore): cleanup old versions for xarrpay-merchant
+```
+
+commit body 中会保留完整中文执行摘要，方便回溯本次创建、更新、删除了哪些版本。
